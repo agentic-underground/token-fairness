@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "name": "value-handler-fanout",
+  "description": "One review+uplift pass per value-handler agent — the second half of the job that broke. Heavier per unit than a plain review (it edits), so its budget appetite is larger and its max_parallel lower.",
+  "unit": { "kind": "agent", "agent": "foundry:reviewer" },
+  "model": "claude-sonnet-4-6",
+  "tools_allowed": ["Read", "Grep", "Glob", "Edit"],
+  "plugins_needed": ["foundry"],
+  "context": {
+    "load": ["doc/cached-reviews/<unit>.md"],
+    "exclude_default_context": true,
+    "station_scoped": true
+  },
+  "fanout": { "width_default": 18, "max_parallel": 3, "stages": 2 },
+  "estimated_unit_tokens": 35000,
+  "budget_directive_required": true,
+  "offpeak_eligible": true
+}

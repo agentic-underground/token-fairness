@@ -3,10 +3,18 @@
 # and through `tf`, asserting identical stdout + exit code. This is the no-regression proof
 # that the Rust port preserves the lockout guard's behaviour bit-for-bit.
 #
-#   BASH_DIR=/path/to/concierge/scheduler TF=/path/to/tf bash tests/conformance.sh
+# The bash oracle is VENDORED — a frozen snapshot of idea-to-production's
+# plugins/concierge/scheduler/ captured at the SHA in tests/oracle/SOURCE_SHA — because the
+# scheduler was removed from idea-to-production (it lives here now). It is vendored under
+# oracle/plugins/concierge/scheduler so the original repo-relative paths (the oscron wrapper
+# at <repo>/plugins/concierge/scheduler/run-offpeak-job.sh) resolve unchanged. Override
+# BASH_DIR only to diff against a different/live tree.
+#
+#   TF=/path/to/tf bash tests/conformance.sh
 set -uo pipefail
 
-BASH_DIR="${BASH_DIR:-$HOME/Code/idea-to-production/plugins/concierge/scheduler}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+BASH_DIR="${BASH_DIR:-$HERE/oracle/plugins/concierge/scheduler}"
 TF="${TF:-$HOME/Code/token-fairness/target/debug/tf}"
 
 pass=0 fail=0
@@ -167,11 +175,12 @@ est_case "named-seeded"    --name plan:medium --width 1
 # to a fake — NEVER the real crontab.
 # ======================================================================================
 
-# Pin the oracle to a known SHA (review S4 — the bash evolves in its own repo).
+# Pin the oracle to a known SHA (review S4). The oracle is vendored frozen, so its provenance
+# is recorded in tests/oracle/SOURCE_SHA rather than read from a live git checkout.
 ORACLE_SHA_PINNED="0b46ff35cb746ad14ac165431f93dcb613b517a8"
-ORACLE_SHA_NOW="$(git -C "$BASH_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+ORACLE_SHA_NOW="$(cat "$HERE/oracle/SOURCE_SHA" 2>/dev/null | tr -d '[:space:]' || echo unknown)"
 if [ "$ORACLE_SHA_NOW" != "$ORACLE_SHA_PINNED" ]; then
-  printf '\n%s⚠ oracle drift%s: pinned %s but found %s — re-validate before trusting green.\n' \
+  printf '\n%s⚠ oracle drift%s: pinned %s but vendored %s — re-validate before trusting green.\n' \
     "$_C_DIM" "$_C_RST" "${ORACLE_SHA_PINNED:0:12}" "${ORACLE_SHA_NOW:0:12}"
 fi
 

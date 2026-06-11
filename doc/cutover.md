@@ -1,38 +1,36 @@
-# Cutover — retiring the idea-to-production bash scheduler, safely
+# Cutover — retiring the idea-to-production bash scheduler
 
 token-fairness is the standalone successor to CONCIERGE's bash token-scheduler. Every observable
-contract of the bash (`~/Code/idea-to-production/plugins/concierge/scheduler/`) is reproduced by the
-`tf` binary and proven two ways:
+contract of the original bash is reproduced by the `tf` binary and proven two ways:
 
 - **`cargo test`** — self-contained frozen vectors for every verb (the CI gate, no bash needed).
-- **`tests/conformance.sh`** — a byte-for-byte differential against the bash oracle, pinned to SHA
-  `0b46ff35cb746ad14ac165431f93dcb613b517a8`, covering stdout, exit codes, and every written state
-  file (ledger, registry, snapshot, signal-findings, plan-open, calibration, crontab).
+- **`tests/conformance.sh`** — a byte-for-byte differential against the bash oracle, covering stdout,
+  exit codes, and every written state file (ledger, registry, snapshot, signal-findings, plan-open,
+  calibration, crontab). The oracle is now **vendored** at
+  [`tests/oracle/plugins/concierge/scheduler/`](../tests/oracle/), a frozen snapshot captured at SHA
+  `0b46ff35cb746ad14ac165431f93dcb613b517a8` (recorded in `tests/oracle/SOURCE_SHA`) — because the
+  scheduler has been **removed from idea-to-production**, so there is no longer a live tree to diff
+  against. The snapshot is immutable; the port is measured against it forever.
 
-Because Claude Code has **no cross-marketplace dependency resolution**, token-fairness is a manual,
-optional install (`/plugin marketplace add` + `/plugin install scheduler@token-fairness`). So the
-cutover must never leave the ALWAYS-ON token guard broken. It is sequenced (review C1):
+## The executed cutover — a single hard removal
 
-## Release 1 — ship token-fairness; i2p KEEPS its bash
+The decision was a **clean break**, not a sequenced keep-the-bash-as-fallback migration:
+idea-to-production **deleted** concierge's `scheduler/` tree, the `token-scheduler` skill, the
+`/concierge:schedule` command, and the `token-aware-scheduling.md` knowledge doc; its `CLAUDE.md`
+§TOKEN SAFETY now states plainly that token safety lives in this plugin.
 
-token-fairness ships (binary + plugin + marketplace). idea-to-production keeps concierge's bash as a
-graceful-degradation fallback. The `CLAUDE.md §TOKEN SAFETY` protocol calls a **resolver** that
-prefers `tf` and falls back to the bash when `tf` is absent:
+**Accepted trade-off (review C2):** because Claude Code has **no cross-marketplace dependency
+resolution**, token-fairness is a **manual, optional** install
+(`/plugin marketplace add ~/Code/token-fairness` + `/plugin install scheduler@token-fairness`). With
+the bash gone from i2p, an i2p user who has **not** installed token-fairness has **no** active token
+guard. That is the deliberate consequence of "remove the scheduler from the marketplace": the guard
+is now a property of *installing token-fairness*, globally, rather than of being in the i2p repo.
+There is no bash fallback — the vendored oracle exists only for the conformance proof, not as a
+runtime path.
 
-```bash
-# Resolver: prefer the tested binary; fall back to the bash original when tf isn't installed.
-tf_run() {
-  if command -v tf >/dev/null 2>&1; then
-    tf "$@"
-  else
-    # map the verb to the bash script (gate/preflight/plan/plan-open/plan-close → scheduler.sh;
-    # estimate → scheduler-estimate.sh; ledger → job-ledger.sh; registry → jobs-registry.sh; …)
-    bash "$HOME/Code/idea-to-production/plugins/concierge/scheduler/<mapped>.sh" "$@"
-  fi
-}
-```
+### The port mapping (also the vendored-oracle layout)
 
-Both paths work; `tf` is preferred when present. The verb→script map is the inverse of the port:
+Each `tf` verb reproduces one bash script; this is the conformance pairing:
 
 | `tf` verb | bash script |
 |---|---|
@@ -49,36 +47,31 @@ Both paths work; `tf` is preferred when present. The verb→script map is the in
 | `oscron` / `run-offpeak` | `install-oscron.sh` / `run-offpeak-job.sh` |
 | `preflight-fanout` | `preflight-fanout.sh` |
 
-### State-file coexistence during the half-migration (review C4)
+### State-file coexistence (review C4)
 
-Both plugins may be installed at once. They write the same
-`~/.claude/state/i2p-cost/{ratelimit-snapshot,signal-findings,calibration,session}.json`. The chosen
-contract is **shared-path coexistence**: the schemas are byte-identical (proven by conformance), so a
-snapshot written by either side is read correctly by the other. The one asymmetry to know:
-`tf signal` / `tf report` honour `I2P_SIGNAL_FINDINGS` with a HOME default and do **not** read
-`I2P_COST_STATE_DIR` (faithful to `signal-probe.sh`), whereas `tf snapshot` honours
-`I2P_COST_STATE_DIR` (faithful to `ratelimit-snapshot.sh`). With no overrides set (the normal case)
-every path resolves to the same `~/.claude/state/i2p-cost/`, so the two writers coexist. If a clean
-split is ever wanted, point token-fairness at `~/.claude/state/token-fairness/` via the env overrides
-and run a one-time copy of `calibration.json` (Open Decision D3).
+If both this plugin and an *older, pre-removal* concierge are installed on the same machine during a
+user's own upgrade, they write the same
+`~/.claude/state/i2p-cost/{ratelimit-snapshot,signal-findings,calibration,session}.json`. The contract
+is **shared-path coexistence**: the schemas are byte-identical (proven by conformance), so a file
+written by either side is read correctly by the other. One asymmetry: `tf signal` / `tf report` honour
+`I2P_SIGNAL_FINDINGS` with a HOME default and do **not** read `I2P_COST_STATE_DIR` (faithful to
+`signal-probe.sh`), whereas `tf snapshot` honours `I2P_COST_STATE_DIR` (faithful to
+`ratelimit-snapshot.sh`). With no overrides (the normal case) every path resolves to the same dir. For
+a clean split, point token-fairness at `~/.claude/state/token-fairness/` via the env overrides and
+run a one-time copy of `calibration.json` (Open Decision D3).
 
-### The session.json writer travels WITH the scheduler (review C3 — CRITICAL)
+### The session.json writer travels WITH the scheduler (review C3)
 
-`session.json .tokens` is the ACTUAL-spend signal that makes convergence work, and it was written by
+`session.json .tokens` is the ACTUAL-spend signal that makes convergence work; it was written by
 concierge's `statusline/capture-cost.sh`. token-fairness ships its own
 [`hooks/session-tokens.sh`](../plugins/scheduler/hooks/session-tokens.sh) Stop-hook writer so
-convergence keeps working even if concierge is later removed. As a backstop, `tf plan-close` emits a
-visible warning when it sees `baseline == current == 0` — so a missing writer is never silent.
+convergence keeps working independently of concierge. As a backstop, `tf plan-close` emits a visible
+warning when it sees `baseline == current == 0` — a missing writer is never silent.
 
-## Release 2+ — retire the bash
+## Follow-up (token-fairness side)
 
-Once adoption is real, delete concierge's `scheduler/` and drop the resolver's bash arm. Until then
-the bash is the fallback, not dead weight. Also update the foundry
-`knowledge/orchestration/tier-assignment.md` reference and the glossary to point at `tf` /
-token-fairness.
-
-## What "i2p's scheduler can be retired" means today
-
-It means token-fairness is a **complete, proven, drop-in** replacement: every verb, exit code, state
-file, and crontab line is reproduced and gated. The retirement itself is i2p's Release-2 step (delete
-the bash, drop the resolver arm); this repo provides everything that step depends on.
+- **Per-arch binaries (review W2):** `bin/` currently ships `tf-x86_64-linux` only. macOS/ARM users
+  need their targets built before token-fairness is a guard for them; until then the missing-arch case
+  is simply "no guard" (there is no bash fallback). Ship darwin-arm64 / darwin-x64 / linux-arm64.
+- **Naming (Open Decision D5):** `token-fairness` / `tf` are working names — run `/ideator:name`
+  before wider publishing.
