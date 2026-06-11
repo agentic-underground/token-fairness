@@ -93,14 +93,26 @@ fn main() {
                 match verb {
                     "ratio" => calibrate::ratio(name),
                     "confidence" => calibrate::confidence(name),
+                    "kaizen" => calibrate::kaizen(name),
                     "close" => calibrate::close(name, a.pos(2).unwrap_or(""), a.pos(3).unwrap_or("")),
                     _ => Out::err(
-                        "usage: tf calibrate {ratio <name>|close <name> <estimate> <actual>|confidence <name>}",
+                        "usage: tf calibrate {ratio <name>|close <name> <estimate> <actual>|confidence <name>|kaizen <name>}",
                         2,
                     ),
                 }
             }
         }
+        // The self-improving estimator surface: `tf estimator <key>` shows the champion + blend +
+        // per-algorithm scoreboard; `tf estimator backtest <key>` replays the recorded history to
+        // prove which formula would have been most accurate (the bounded "best formula" hunt).
+        "estimator" => match a.pos(0).unwrap_or("") {
+            "" => Out::err("usage: tf estimator <key> | tf estimator backtest <key>", 2),
+            "backtest" => match a.pos(1) {
+                Some(key) if !key.is_empty() => calibrate::backtest(key),
+                _ => Out::err("usage: tf estimator backtest <key>", 2),
+            },
+            key => calibrate::kaizen(key),
+        },
         "ceiling-check" => {
             let payload = read_stdin();
             ceiling::check(

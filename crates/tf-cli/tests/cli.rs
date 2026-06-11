@@ -279,3 +279,95 @@ fn offpeak_budget_morning_reserve() {
     // and the login window is the one the user inherits (index == login_window_index)
     assert_eq!(v["login_window_index"], 3);
 }
+
+/// The self-improving ensemble: after enough samples the CHAMPION (lowest-error algorithm) drives
+/// `calibrate ratio`, with the blend + per-algorithm scoreboard exposed, and `backtest` ranks the
+/// formulas over the recorded history. On a smooth upward stream `linreg` should lead.
+#[test]
+fn ensemble_champion_and_backtest() {
+    let f = std::env::temp_dir().join(format!("tf-ens-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&f);
+    let fp = f.to_str().unwrap();
+    let env = [("I2P_CALIBRATION_FILE", fp)];
+    for i in 1..=8 {
+        let act = (100000 + i * 500).to_string();
+        run(&["calibrate", "close", "grind", "100000", &act], "", &env);
+    }
+    // kaizen view: 7 algorithms on the board, a champion + blend + numeric MAPE.
+    let (k, _) = run(&["estimator", "grind"], "", &env);
+    let kv: serde_json::Value = serde_json::from_str(k.trim()).unwrap();
+    assert_eq!(kv["board"].as_array().unwrap().len(), 7);
+    assert_eq!(kv["samples"], 8);
+    let champ = kv["champion"].as_str().unwrap().to_string();
+    assert!(kv["mape"].as_f64().unwrap() >= 0.0);
+    // `calibrate ratio` is now the champion's prediction (parses as a number).
+    let (r, _) = run(&["calibrate", "ratio", "grind"], "", &env);
+    assert!(r.trim().parse::<f64>().unwrap() > 0.9);
+    // backtest ranks every formula by full-history MAPE; the best is a real algorithm.
+    let (b, _) = run(&["estimator", "backtest", "grind"], "", &env);
+    let bv: serde_json::Value = serde_json::from_str(b.trim()).unwrap();
+    assert_eq!(bv["ranking"].as_array().unwrap().len(), 7);
+    let best = bv["best"].as_str().unwrap();
+    assert!(
+        ["linreg", "last", "ewma@0.6", "ewma@0.4", "ewma@0.2", "sma@5", "median@7"].contains(&best)
+    );
+    // online champion and backtest best need not be identical, but both must be valid algorithms.
+    assert!(!champ.is_empty());
+    let _ = std::fs::remove_file(&f);
+}
+
+/// Hierarchical taxonomy backoff: a deep node with one sample leans toward its better-sampled
+/// parent rather than committing to its own lone ratio (increasing fidelity as samples accrue).
+#[test]
+fn taxonomy_backoff_estimate() {
+    let f = std::env::temp_dir().join(format!("tf-tax-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&f);
+    let fp = f.to_str().unwrap();
+    let env = [("I2P_CALIBRATION_FILE", fp)];
+    // parent ratio ~1.30 (8 samples), child a single 1.20 sample.
+    for _ in 0..8 {
+        run(
+            &[
+                "calibrate",
+                "close",
+                "experiment/code-gen",
+                "100000",
+                "130000",
+            ],
+            "",
+            &env,
+        );
+    }
+    run(
+        &[
+            "calibrate",
+            "close",
+            "experiment/code-gen/opus",
+            "100000",
+            "120000",
+        ],
+        "",
+        &env,
+    );
+    // estimate for the child: resolved ratio is pulled UP toward the parent's 1.3, above its own 1.2.
+    let (e, _) = run(
+        &[
+            "estimate",
+            "--name",
+            "experiment/code-gen/opus",
+            "--width",
+            "1",
+            "--measured-unit-tokens",
+            "100000",
+        ],
+        "",
+        &env,
+    );
+    let ev: serde_json::Value = serde_json::from_str(e.trim()).unwrap();
+    let est = ev["est_total"].as_i64().unwrap();
+    assert!(
+        est > 120_000 && est < 130_000,
+        "child est {est} sits between own 1.2 and parent 1.3"
+    );
+    let _ = std::fs::remove_file(&f);
+}

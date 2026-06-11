@@ -73,6 +73,18 @@ pub fn calibration_file() -> String {
     format!("{}/calibration.json", state_dir())
 }
 
+/// The estimator's own accuracy ledger (append-only JSONL) — a sibling of the calibration file,
+/// so it honours `I2P_CALIBRATION_FILE`. Backs the KAIZEN accuracy-over-time graph.
+pub fn accuracy_ledger() -> String {
+    let cal = calibration_file();
+    match Path::new(&cal).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => {
+            format!("{}/estimator-accuracy.jsonl", dir.to_string_lossy())
+        }
+        _ => "estimator-accuracy.jsonl".to_string(),
+    }
+}
+
 pub fn read_json(path: &str) -> Option<Value> {
     let s = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&s).ok()

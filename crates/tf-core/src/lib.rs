@@ -8,6 +8,7 @@
 
 pub mod calibrate;
 pub mod ceiling;
+pub mod ensemble;
 pub mod estimate;
 pub mod fmt;
 pub mod ledger;

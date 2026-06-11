@@ -218,10 +218,64 @@ pub fn plan_open(argv: &[String]) -> Out {
         &popen,
         &serde_json::json!({ "class": class, "est": est, "baseline_tokens": base }),
     );
-    Out::ok(format!(
-        "{{\"opened\":\"plan:{}\",\"est\":{},\"baseline_tokens\":{}}}\n",
-        class, est, base
-    ))
+    // KAIZEN at the OUTSET of the job — the prediction, the champion behind it, and how much the
+    // ensemble disagrees (on stderr so stdout stays the machine JSON line).
+    let kaizen = kaizen_line("plan-open", &format!("plan:{}", class));
+    Out {
+        stdout: format!(
+            "{{\"opened\":\"plan:{}\",\"est\":{},\"baseline_tokens\":{}}}\n",
+            class, est, base
+        ),
+        stderr: kaizen,
+        code: 0,
+    }
+}
+
+/// A one-line KAIZEN narration for a class key (parsed from `kaizen_string`): champion, MAPE,
+/// samples, and the ensemble spread. Empty when there is no data yet.
+fn kaizen_line(stage: &str, name: &str) -> String {
+    let ks = calibrate::kaizen_string(name);
+    let v: Value = serde_json::from_str(&ks).unwrap_or(Value::Null);
+    let samples = v.get("samples").and_then(|x| x.as_i64()).unwrap_or(0);
+    if samples == 0 {
+        return String::new();
+    }
+    let champ = v.get("champion").and_then(|x| x.as_str()).unwrap_or("?");
+    let cr = v
+        .get("champion_ratio")
+        .and_then(|x| x.as_f64())
+        .unwrap_or(1.0);
+    let mape = v.get("mape").and_then(|x| x.as_f64());
+    let preds: Vec<f64> = v
+        .get("board")
+        .and_then(|b| b.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.get("pred").and_then(|x| x.as_f64()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let spread = match (
+        preds.iter().cloned().fold(f64::INFINITY, f64::min),
+        preds.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+    ) {
+        (lo, hi) if lo.is_finite() && hi.is_finite() && cr.abs() > 1e-9 => (hi - lo) / cr * 100.0,
+        _ => 0.0,
+    };
+    let acc = match mape {
+        Some(m) => format!("MAPE {}%", fmt::fixed(m * 100.0, 2)),
+        None => "MAPE n/a".to_string(),
+    };
+    format!(
+        "🧠 KAIZEN[{}] {} · champion {} ×{} · ensemble spread ±{}% · {} · {} samples",
+        stage,
+        name,
+        champ,
+        fmt::fixed(cr, 4),
+        fmt::fixed(spread, 1),
+        acc,
+        samples
+    )
 }
 
 pub fn plan_close(_argv: &[String]) -> Out {
@@ -249,18 +303,56 @@ pub fn plan_close(_argv: &[String]) -> Out {
     if base == 0 && cur == 0 {
         eprintln!("scheduler: plan-close sees baseline==current==0 — the session.json .tokens writer may not be installed; convergence cannot advance.");
     }
+    let mut kaizen = String::new();
     let conv = if pest > 0 && actual > 0 {
         let name = format!("plan:{}", pclass);
+        // Capture accuracy BEFORE folding so we can report the KAIZEN delta after.
+        let mape_before = calibrate_mape(&name);
         let _ = calibrate::close(&name, &pest.to_string(), &actual.to_string());
+        let mape_after = calibrate_mape(&name);
+        let ratio = actual as f64 / pest as f64;
+        let champ = serde_json::from_str::<Value>(&calibrate::kaizen_string(&name))
+            .ok()
+            .and_then(|v| v.get("champion").and_then(|x| x.as_str()).map(String::from))
+            .unwrap_or_else(|| "?".into());
+        // The self-review after every job: actual vs estimate, who leads now, and the accuracy move.
+        kaizen = format!(
+            "📊 KAIZEN[plan-close] {} · actual {} vs est {} (ratio ×{}) · champion {} · MAPE {}→{}",
+            name,
+            actual,
+            pest,
+            fmt::fixed(ratio, 4),
+            champ,
+            mape_before
+                .map(|m| format!("{}%", fmt::fixed(m * 100.0, 2)))
+                .unwrap_or_else(|| "n/a".into()),
+            mape_after
+                .map(|m| format!("{}%", fmt::fixed(m * 100.0, 2)))
+                .unwrap_or_else(|| "n/a".into()),
+        );
         calibrate::confidence_string(&name)
     } else {
         "null".to_string()
     };
     let _ = std::fs::remove_file(&popen);
-    Out::ok(format!(
-        "{{\"class\":\"plan:{}\",\"est\":{},\"actual\":{},\"convergence\":{}}}\n",
-        pclass, pest, actual, conv
-    ))
+    if base == 0 && cur == 0 {
+        // already warned above; keep stderr informative even when convergence can't advance.
+    }
+    Out {
+        stdout: format!(
+            "{{\"class\":\"plan:{}\",\"est\":{},\"actual\":{},\"convergence\":{}}}\n",
+            pclass, pest, actual, conv
+        ),
+        stderr: kaizen,
+        code: 0,
+    }
+}
+
+/// The champion's current MAPE for a class key, or None when unseeded.
+fn calibrate_mape(name: &str) -> Option<f64> {
+    serde_json::from_str::<Value>(&calibrate::kaizen_string(name))
+        .ok()
+        .and_then(|v| v.get("mape").and_then(|x| x.as_f64()))
 }
 
 // ── gate ───────────────────────────────────────────────────────────────────────────────

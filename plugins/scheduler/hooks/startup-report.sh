@@ -32,6 +32,12 @@ ctx="token-fairness scheduler — session-safe startup. Durable scheduled jobs l
 
 msg="$brief"
 
+# KAIZEN at startup — the self-improving estimator's current champion(s) + accuracy, so every
+# session opens knowing how the predictor is doing. Up to 2 classes; silent when there's no data.
+kz="$("$TF" report "$cwd" --kaizen 2>/dev/null | grep 'MAPE' | head -2)"
+[ -n "$kz" ] && msg="${msg}"$'\n'"🧠 KAIZEN"$'\n'"$kz"
+ctx="${ctx} The estimator self-improves: it runs several prediction algorithms concurrently and promotes the most accurate (champion) per job class; \`tf report ${cwd} --kaizen\` shows the ensemble scoreboard, \`--taxonomy\` the classification graph, and \`tf estimator backtest <key>\` replays history to find the best formula."
+
 # Periodic tip (line 3) — throttled to ~once/day so it teaches without nagging.
 tipfile="${HOME}/.claude/hook-state/scheduler-tip-last"
 now_epoch="$(date +%s 2>/dev/null || echo 0)"

@@ -117,56 +117,17 @@ ob_case "far-future-trunc" --now 1700000000 --login 1900000000 --reset 170000000
 ob_case "missing-login"   --now 1700000000 --reset 1700000000
 ob_case "bad-headroom-dft" --now 1700000000 --login 1700040000 --reset 1700000000 --headroom 250
 
-# ---- calibrate (stateful, identical sequence on isolated files) ----------------------
-printf '\n=== calibrate (sequence) ===\n'
-BCAL="$(mktemp)"; TCAL="$(mktemp)"; rm -f "$BCAL" "$TCAL"
-cal_step() {
-  local label="$1"; shift
-  local bo brc to trc
-  bo="$(I2P_CALIBRATION_FILE="$BCAL" bash "$BASH_DIR/calibrate.sh" "$@" 2>/dev/null)"; brc=$?
-  to="$(I2P_CALIBRATION_FILE="$TCAL" "$TF" calibrate "$@" 2>/dev/null)"; trc=$?
-  cmp_case "$label" "$bo" "$brc" "$to" "$trc"
-}
-cal_step "ratio-empty"     ratio reviewer-fanout
-cal_step "conf-seeding"    confidence reviewer-fanout
-cal_step "close-1.2"       close reviewer-fanout 100000 120000
-cal_step "ratio-after1"    ratio reviewer-fanout
-cal_step "conf-after1"     confidence reviewer-fanout
-cal_step "close-0.9"       close reviewer-fanout 100000 90000
-cal_step "ratio-after2"    ratio reviewer-fanout
-cal_step "conf-after2"     confidence reviewer-fanout
-cal_step "close-equal"     close reviewer-fanout 100000 100000
-cal_step "conf-after3"     confidence reviewer-fanout
-cal_step "close-other-1.0" close plan:medium 80000 80000
-cal_step "ratio-other"     ratio plan:medium
-cal_step "conf-other"      confidence plan:medium
-cal_step "bad-est"         close x 0 100
-cal_step "bad-act"         close x 100 abc
-# many samples → tier transitions (CALIBRATING → CONVERGING/CONVERGED)
-for i in 1 2 3 4 5 6 7 8 9 10 11; do
-  cal_step "loop-close-$i" close grind 100000 $((100000 + i*1000))
-done
-cal_step "conf-converged"  confidence grind
-
-# ---- estimate (depends on calibration state) -----------------------------------------
-printf '\n=== estimate ===\n'
-est_case() {
-  local label="$1"; shift
-  local bo brc to trc
-  bo="$(I2P_CALIBRATION_FILE="$BCAL" bash "$BASH_DIR/scheduler-estimate.sh" "$@" 2>/dev/null)"; brc=$?
-  to="$(I2P_CALIBRATION_FILE="$TCAL" "$TF" estimate "$@" 2>/dev/null)"; trc=$?
-  cmp_case "$label" "$bo" "$brc" "$to" "$trc"
-}
-est_case "class-large"     --class large
-est_case "class-medium"    --class medium
-est_case "class-small"     --class small
-est_case "class-epic"      --class epic
-est_case "measured"        --name reviewer-fanout --width 26 --measured-unit-tokens 18000
-est_case "history"         --name grind --width 10 --history-tokens 22000
-est_case "seed-fallback"   --name brandnew --width 4
-est_case "profile"         --profile "$BASH_DIR/profiles/reviewer-fanout.json"
-est_case "profile-width"   --profile "$BASH_DIR/profiles/reviewer-fanout.json" --width 5
-est_case "named-seeded"    --name plan:medium --width 1
+# ---- calibrate + estimate: RETIRED from the differential (estimator family evolved) ------
+# The estimator is no longer the bash's single fixed EWMA-0.4: it now runs a multi-algorithm
+# ENSEMBLE (champion + blend) with online accuracy tracking and hierarchical-taxonomy backoff
+# (knowledge/estimator-kaizen.md). So `calibrate close` (sample ≥3), `calibrate ratio`, and
+# `estimate` (with seeded data) intentionally DIVERGE from the bash oracle. Per the approved plan
+# (the user's "evolve the estimator" choice), these are proven instead by self-contained
+# frozen-vector + unit tests: crates/tf-cli/tests/{cli.rs,stateful.rs} (calibrate_sequence,
+# convergence_band_tightens, estimate_vectors, ensemble_*) and crates/tf-core/src/ensemble.rs
+# unit tests. The first-sample / no-data paths remain bash-identical and are frozen there.
+printf '\n=== calibrate + estimate ===\n'
+printf '  %sskip%s estimator family (multi-algorithm ensemble — proven by cargo frozen vectors)\n' "$_C_DIM" "$_C_RST"
 
 # ======================================================================================
 # STATEFUL + ORCHESTRATION TIER (plan §2.8) — side-effecting verbs. The pure-stdout model
@@ -356,10 +317,10 @@ schq() { local label="$1"; shift
   cmp_case "$label" "$bo" "$brc" "$to" "$trc"
 }
 schq "preflight-class"  preflight --class large
-schq "preflight-meas"   preflight --name reviewer-fanout --width 26 --measured-unit-tokens 18000
+# (preflight-meas / plan-named retired — they embed a seeded estimate, which the ensemble evolves;
+#  the no-data class paths below stay bash-identical.)
 schq "plan-peak-large"  plan --class large --now 1700038800 --tz-offset-min 0
 schq "plan-offpeak"     plan --class large --now "$CLK" --tz-offset-min -420
-schq "plan-named"       plan --name reviewer-fanout --width 26 --measured-unit-tokens 18000 --now 1700038800 --tz-offset-min 0
 
 # Full convergence loop (review C3): plan-open → session delta → plan-close → EWMA advanced.
 LCB="$ST/lcb.json"; LCT="$ST/lct.json"   # calibration files, bash vs tf
@@ -373,7 +334,8 @@ loop_side() { # <bin...> <SESSION> <POPEN> <CAL>
 bo="$(loop_side "bash $BASH_DIR/scheduler.sh" "$ST/sb.json" "$ST/pob.json" "$LCB" 2>/dev/null)"; brc=$?
 to="$(loop_side "$TF" "$ST/st.json" "$ST/pot.json" "$LCT" 2>/dev/null)"; trc=$?
 cmp_case "convergence-loop-stdout" "$bo" "$brc" "$to" "$trc"
-cmp_state "convergence-loop-cal" "$LCB" "$LCT"
+# (convergence-loop-cal state-diff retired: the tf calibration file now carries ensemble fields
+#  the bash lacks; the convergence advance is asserted by `samples` below + the cargo loop test.)
 ewma_after="$(jq -r '."plan:medium".samples' "$LCT" 2>/dev/null)"
 if [ "$ewma_after" = "1" ]; then pass=$((pass+1)); printf '  %sok%s   convergence-advanced %s(EWMA folded 1 sample)%s\n' "$_C_GRN" "$_C_RST" "$_C_DIM" "$_C_RST"
 else fail=$((fail+1)); printf '  %sFAIL%s convergence-advanced (samples=%s)\n' "$_C_RED" "$_C_RST" "$ewma_after"; fi

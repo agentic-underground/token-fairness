@@ -121,6 +121,8 @@ pub fn dispatch(argv: &[String]) -> Out {
         match a.as_str() {
             "--scheduled" => mode = "scheduled",
             "--estimator" => mode = "estimator",
+            "--kaizen" => mode = "kaizen",
+            "--taxonomy" => mode = "taxonomy",
             "--brief" => mode = "brief",
             s if s.starts_with('-') => {}
             s => dir = s.to_string(),
@@ -200,9 +202,75 @@ pub fn dispatch(argv: &[String]) -> Out {
         }
     };
 
+    // 🧠 KAIZEN — the self-improving ensemble made visible: champion, blend, accuracy, and which
+    // formula leads each class. The "continuous improvement in numbers" surface.
+    let print_kaizen = |s: &mut String| {
+        s.push_str(&format!(
+            "🧠 Estimator KAIZEN — ensemble scoreboard ({} classes)\n",
+            n_cal
+        ));
+        if n_cal == 0 {
+            s.push_str("   no samples yet — the field starts on the legacy EWMA-0.4 champion.\n");
+            return;
+        }
+        for k in &cal_keys {
+            let ks = calibrate::kaizen_string(k);
+            let champ = raw_field(&ks, "champion");
+            let cr = raw_field(&ks, "champion_ratio");
+            let blend = raw_field(&ks, "blend_ratio");
+            let mape = raw_field(&ks, "mape");
+            let samples = raw_field(&ks, "samples");
+            let acc = if mape.is_empty() || mape == "null" {
+                "n/a".to_string()
+            } else {
+                let m: f64 = mape.parse().unwrap_or(0.0);
+                format!("{}%", fmt::fixed(m * 100.0, 2))
+            };
+            s.push_str(&format!(
+                "  {:<24} {:>3} samples · champion {} ×{} · blend ×{} · MAPE {}\n",
+                k, samples, champ, cr, blend, acc
+            ));
+        }
+        s.push_str(
+            "   (champion drives the estimate; blend is the wisdom-of-the-ensemble cross-check)\n",
+        );
+    };
+    // 🌳 TAXONOMY — the increasing-fidelity classification graph: each `/`-delimited node with its
+    // own sample count + champion. Deep nodes shrink toward parents until they have enough data.
+    let print_taxonomy = |s: &mut String| {
+        s.push_str(&format!(
+            "🌳 Estimator taxonomy — job classification graph ({} nodes)\n",
+            n_cal
+        ));
+        if n_cal == 0 {
+            s.push_str("   no classes yet.\n");
+            return;
+        }
+        let mut keys = cal_keys.clone();
+        keys.sort();
+        for k in &keys {
+            let depth = k.matches('/').count();
+            let leaf = k.rsplit('/').next().unwrap_or(k);
+            let cs = calibrate::confidence_string(k);
+            let samples = raw_field(&cs, "samples");
+            let band = raw_field(&cs, "p95_band_pct");
+            let champ = raw_field(&calibrate::kaizen_string(k), "champion");
+            s.push_str(&format!(
+                "  {}{} — {} samples · ±{}% · {}\n",
+                "  ".repeat(depth),
+                leaf,
+                samples,
+                band,
+                champ
+            ));
+        }
+    };
+
     match mode {
         "scheduled" => print_scheduled(&mut s),
         "estimator" => print_estimator(&mut s),
+        "kaizen" => print_kaizen(&mut s),
+        "taxonomy" => print_taxonomy(&mut s),
         "brief" => {
             if n_jobs == 0 && n_cal == 0 {
                 return Out::default();
