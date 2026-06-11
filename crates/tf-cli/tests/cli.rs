@@ -179,3 +179,103 @@ fn calibrate_sequence() {
     );
     let _ = std::fs::remove_file(&f);
 }
+
+/// The SOLID convergence covenant, "continuous improvement made visible": as estimate↔actual
+/// samples accrue, the p95 band tightens DRAMATICALLY and the tier walks
+/// SEEDING→CALIBRATING→CONVERGING→CONVERGED. (The band can wiggle in the noisy tail — variance,
+/// not regression — so we assert the dramatic tightening + the tier progression, not strict
+/// monotonicity.)
+#[test]
+fn convergence_band_tightens_over_samples() {
+    let f = std::env::temp_dir().join(format!("tf-conv-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&f);
+    let fp = f.to_str().unwrap();
+    let env = [("I2P_CALIBRATION_FILE", fp)];
+
+    let close_one = |i: i64| {
+        let actual = (100000 + i * 400).to_string();
+        run(
+            &["calibrate", "close", "grind", "100000", &actual],
+            "",
+            &env,
+        );
+    };
+    let band_tier = || -> (f64, String) {
+        let (c, _) = run(&["calibrate", "confidence", "grind"], "", &env);
+        let v: serde_json::Value = serde_json::from_str(c.trim()).unwrap();
+        (
+            v["p95_band_pct"].as_f64().unwrap(),
+            v["tier"].as_str().unwrap().to_string(),
+        )
+    };
+
+    close_one(1);
+    let (band1, tier1) = band_tier();
+    for i in 2..=6 {
+        close_one(i);
+    }
+    let (band6, tier6) = band_tier();
+    for i in 7..=12 {
+        close_one(i);
+    }
+    let (band12, tier12) = band_tier();
+
+    assert!(band1 >= 40.0, "early band is wide (SEEDING-ish): {band1}");
+    assert_eq!(tier1, "CALIBRATING");
+    assert!(band6 < band1, "band tightened: {band6} < {band1}");
+    assert_eq!(tier6, "CONVERGING");
+    assert_eq!(tier12, "CONVERGED");
+    assert!(band12 <= 15.0, "converged band is tight: {band12}");
+    let _ = std::fs::remove_file(&f);
+}
+
+/// Fail-closed (the non-negotiable): a partial payload — a window object present but with no
+/// `used_percentage` — is NO_SIGNAL / exit 20, never a silent CLEAR.
+#[test]
+fn ceiling_partial_payload_fails_closed() {
+    assert_line(
+        &["ceiling-check", "--window", "five_hour"],
+        r#"{"rate_limits":{"five_hour":{"resets_at":1749635640}}}"#,
+        &[],
+        r#"{"verdict":"NO_SIGNAL","window":"five_hour","used_pct":null,"ceiling":85,"headroom":15,"resets_at":1749635640}"#,
+        20,
+    );
+}
+
+/// The morning reserve (L3): windows that fully reset before login may run to `100 − headroom`
+/// (85%), but the window the user INHERITS at login is held to `100 − morning_reserve` (here 40%),
+/// so they wake to a usable allowance.
+#[test]
+fn offpeak_budget_morning_reserve() {
+    let (got, rc) = run(
+        &[
+            "offpeak-budget",
+            "--now",
+            "1700000000",
+            "--login",
+            "1700054000",
+            "--reset",
+            "1700000000",
+            "--morning-reserve",
+            "60",
+            "--headroom",
+            "15",
+        ],
+        "",
+        &[],
+    );
+    assert_eq!(rc, 0);
+    let v: serde_json::Value = serde_json::from_str(got.trim()).unwrap();
+    let windows = v["windows"].as_array().unwrap();
+    for w in windows {
+        let role = w["role"].as_str().unwrap();
+        let ceil = w["ceiling_pct"].as_i64().unwrap();
+        if role == "login" {
+            assert_eq!(ceil, 40, "login window held to 100 - reserve(60)");
+        } else {
+            assert_eq!(ceil, 85, "unattended window runs to 100 - headroom(15)");
+        }
+    }
+    // and the login window is the one the user inherits (index == login_window_index)
+    assert_eq!(v["login_window_index"], 3);
+}

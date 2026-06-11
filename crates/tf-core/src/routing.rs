@@ -142,10 +142,31 @@ pub fn route(argv: &[String]) -> Out {
         }
     }
 
+    // The resolved profile (name-or-path) — its declared cognition_class/determinative_handler
+    // fill in when the corresponding flag is absent (cognition-routing.md "Profile schema additions").
+    let profile: Option<Value> = flags
+        .get("profile")
+        .map(|p| crate::state::resolve_profile(p))
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok());
+    let profile_class = profile
+        .as_ref()
+        .and_then(|p| p.get("cognition_class"))
+        .and_then(|x| x.as_str());
+
+    // Precedence: --cognition flag > profile.cognition_class > "discernment".
     let cognition = flags
         .get("cognition")
         .cloned()
+        .or_else(|| profile_class.map(|s| s.to_string()))
         .unwrap_or_else(|| "discernment".into());
+    let det_handler = flags.get("determinative-handler").cloned().or_else(|| {
+        profile
+            .as_ref()
+            .and_then(|p| p.get("determinative_handler"))
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+    });
     let escalate = flags.contains_key("escalate");
     let in_frac: f64 = flags
         .get("in-frac")
@@ -179,11 +200,16 @@ pub fn route(argv: &[String]) -> Out {
 
     let (tier, model) = route_class(&cognition, escalate);
 
-    // Determinative units leave the token economy entirely.
+    // Determinative units leave the token economy entirely — a tested handler produces the one
+    // correct output for 0 model tokens (see knowledge/determinism-transfer.md).
     if tier == "none" {
+        let handler = match &det_handler {
+            Some(h) => format!("\"{}\"", h),
+            None => "null".to_string(),
+        };
         let line = format!(
-            "{{\"name\":\"{}\",\"cognition_class\":\"{}\",\"best_fit_tier\":\"none\",\"model\":null,\"est_total\":0,\"cost_usd\":0,\"note\":\"determinative_handler — 0 model tokens; runs as a tested tf/client handler\"}}\n",
-            name, cognition
+            "{{\"name\":\"{}\",\"cognition_class\":\"{}\",\"best_fit_tier\":\"none\",\"model\":null,\"determinative_handler\":{},\"est_total\":0,\"cost_usd\":0,\"note\":\"determinative_handler — 0 model tokens; runs as a tested tf/client handler\"}}\n",
+            name, cognition, handler
         );
         return Out::ok(line);
     }

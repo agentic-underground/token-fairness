@@ -4,6 +4,7 @@
   "description": "One review+uplift pass per value-handler agent — the second half of the job that broke. Heavier per unit than a plain review (it edits), so its budget appetite is larger and its max_parallel lower.",
   "unit": { "kind": "agent", "agent": "foundry:reviewer" },
   "model": "claude-sonnet-4-6",
+  "cognition_class": "discernment",
   "tools_allowed": ["Read", "Grep", "Glob", "Edit"],
   "plugins_needed": ["foundry"],
   "context": {

@@ -70,13 +70,20 @@ It accepts every `tf estimate` flag (so the token band is identical to a pre-fli
 That is the whole point: the scheduler doesn't just throttle spend, it **moves work to the cheapest
 tier that is still correct**, and moves the determinative slice to 0.
 
-## Profile schema additions
+## Profile schema additions (shipped)
 
-A profile (or per-unit/stage entry) may now declare:
+A profile may declare — and `tf route` now reads — these fields (the shipped `profiles/*.json` carry a
+`cognition_class`; see `lint-fanout.json` for the determinative example):
 
-- `cognition_class` — one of the four classes above. The router fills `model` from it (the model is
-  no longer hardcoded in the profile).
+- `cognition_class` — one of the four classes above. When `--cognition` is absent, the router reads it
+  from the profile and fills `model` from it (no longer hardcoded). Precedence: `--cognition` flag >
+  `profile.cognition_class` > `discernment`.
 - `determinative_handler` (optional) — the path the router substitutes for a model when the class is
-  `determinative`. Its stdout **is** the unit's output. It MUST carry a differential test (same proof
-  discipline as Phase 1) — "0 tokens" must never buy a wrong answer. See
-  [determinism-transfer.md](./determinism-transfer.md).
+  `determinative`. `tf route` echoes it in the output (`"determinative_handler":"…"`, tier `none`, $0);
+  its stdout **is** the unit's output. It MUST carry a differential test (same proof discipline as
+  Phase 1) — "0 tokens" must never buy a wrong answer. See [determinism-transfer.md](./determinism-transfer.md).
+
+**Profile resolution (shipped):** every `--profile` argument is resolved by `state::resolve_profile` —
+an existing file is used verbatim (byte-identical to before), otherwise the value is a NAME resolved
+against `.i2p/job-profiles/<name>.json` (a project override) then `${CLAUDE_PLUGIN_ROOT}/profiles/<name>.json`
+(the shipped copy). This implements the token-scheduler skill's "project overrides in `.i2p/job-profiles/`".

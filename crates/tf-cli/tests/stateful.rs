@@ -340,14 +340,339 @@ fn cognition_routing() {
         &env,
     );
     assert!(got.contains(r#""best_fit_tier":"haiku""#));
-    // determinative leaves the token economy: 0 tokens, 0 $
+    // determinative leaves the token economy: 0 tokens, 0 $ (no handler given → null)
     line(
         &["route", "--cognition", "determinative", "--class", "large"],
         "",
         &env,
-        r#"{"name":"plan:large","cognition_class":"determinative","best_fit_tier":"none","model":null,"est_total":0,"cost_usd":0,"note":"determinative_handler — 0 model tokens; runs as a tested tf/client handler"}"#,
+        r#"{"name":"plan:large","cognition_class":"determinative","best_fit_tier":"none","model":null,"determinative_handler":null,"est_total":0,"cost_usd":0,"note":"determinative_handler — 0 model tokens; runs as a tested tf/client handler"}"#,
         0,
     );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// The shipped profiles dir, relative to this test crate.
+fn profiles_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/scheduler/profiles")
+}
+
+fn pjson(v: &str) -> serde_json::Value {
+    serde_json::from_str(v.trim()).unwrap()
+}
+
+// ── Track 2: profile-driven cognition routing ────────────────────────────────────────────
+#[test]
+fn route_reads_cognition_class_from_profile() {
+    let rev = profiles_dir().join("reviewer-fanout.json");
+    let rev = rev.to_str().unwrap();
+    // No --cognition: the class comes from the profile (discernment → sonnet).
+    let (got, _) = run(&["route", "--profile", rev, "--width", "26"], "", &[]);
+    let v = pjson(&got);
+    assert_eq!(v["cognition_class"], "discernment");
+    assert_eq!(v["best_fit_tier"], "sonnet");
+    assert_eq!(v["model"], "claude-sonnet-4");
+    // The --cognition flag still overrides the profile.
+    let (got, _) = run(
+        &[
+            "route",
+            "--profile",
+            rev,
+            "--cognition",
+            "mechanical",
+            "--width",
+            "26",
+        ],
+        "",
+        &[],
+    );
+    assert_eq!(pjson(&got)["best_fit_tier"], "haiku");
+}
+
+#[test]
+fn route_determinative_handler_from_profile() {
+    let lint = profiles_dir().join("lint-fanout.json");
+    let lint = lint.to_str().unwrap();
+    // A determinative profile → tier none, the handler path, 0 tokens, $0.
+    let (got, rc) = run(&["route", "--profile", lint, "--width", "8"], "", &[]);
+    assert_eq!(rc, 0);
+    let v = pjson(&got);
+    assert_eq!(v["cognition_class"], "determinative");
+    assert_eq!(v["best_fit_tier"], "none");
+    assert_eq!(v["model"], serde_json::Value::Null);
+    assert_eq!(v["determinative_handler"], "./scripts/lint-check.sh");
+    assert_eq!(v["est_total"], 0);
+    assert_eq!(v["cost_usd"], 0);
+}
+
+// ── Track 3: profile-by-name resolution (.i2p/job-profiles/ then ${CLAUDE_PLUGIN_ROOT}/profiles/) ──
+#[test]
+fn profile_by_name_resolution() {
+    let plugin_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/scheduler");
+    let plugin_root = plugin_root.canonicalize().unwrap();
+    // Bare name → resolves the shipped ${CLAUDE_PLUGIN_ROOT}/profiles/<name>.json.
+    let (got, _) = run(
+        &["route", "--profile", "reviewer-fanout", "--width", "26"],
+        "",
+        &[("CLAUDE_PLUGIN_ROOT", plugin_root.to_str().unwrap())],
+    );
+    let v = pjson(&got);
+    assert_eq!(v["name"], "reviewer-fanout");
+    assert_eq!(v["cognition_class"], "discernment");
+
+    // A project override at .i2p/job-profiles/<name>.json WINS over the shipped copy.
+    let d = tmp("profover");
+    std::fs::create_dir_all(d.join(".i2p/job-profiles")).unwrap();
+    std::fs::write(
+        d.join(".i2p/job-profiles/reviewer-fanout.json"),
+        r#"{"name":"reviewer-fanout","cognition_class":"thought-intensive","estimated_unit_tokens":50000}"#,
+    )
+    .unwrap();
+    let mut cmd = tf();
+    cmd.args(["route", "--profile", "reviewer-fanout", "--width", "1"])
+        .current_dir(&d)
+        .env("CLAUDE_PLUGIN_ROOT", plugin_root.to_str().unwrap())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let out = cmd.output().unwrap();
+    let v = pjson(&String::from_utf8_lossy(&out.stdout));
+    assert_eq!(v["cognition_class"], "thought-intensive"); // override applied
+    assert_eq!(v["est_total"], 50000); // override's unit tokens (×1 ×ratio 1.0)
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// ── Track 1: DEFER verdict (gate + plan), the off-peak hold ───────────────────────────────
+const P_CLEAR_BOTH: &str = r#"{"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":1750000000},"seven_day":{"used_percentage":10,"resets_at":1760000000}}}"#;
+
+#[test]
+fn gate_defer_when_not_offpeak() {
+    let d = tmp("gatedefer");
+    let empty = d.join("empty");
+    let env = [("I2P_COST_STATE_DIR", empty.to_str().unwrap())];
+    // Peak (09:00 local) + require-offpeak → DEFER (exit 4).
+    let (got, rc) = run(
+        &[
+            "gate",
+            "--require-offpeak",
+            "--now",
+            "1700038800",
+            "--tz-offset-min",
+            "0",
+        ],
+        P_CLEAR_BOTH,
+        &env,
+    );
+    assert_eq!(rc, 4, "got={got}");
+    assert_eq!(pjson(&got)["verdict"], "DEFER");
+    // Off-peak (22:13 local) → CONTINUE (exit 0).
+    let (got, rc) = run(
+        &[
+            "gate",
+            "--require-offpeak",
+            "--now",
+            "1700000000",
+            "--tz-offset-min",
+            "0",
+        ],
+        P_CLEAR_BOTH,
+        &env,
+    );
+    assert_eq!(rc, 0);
+    assert_eq!(pjson(&got)["verdict"], "CONTINUE");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn plan_defer_large_in_peak() {
+    // est_total for class large = 250000 ≥ 150000 threshold; peak → DEFER (exit 4).
+    let d = tmp("plandefer");
+    let calf = d.join("cal.json");
+    let env = [("I2P_CALIBRATION_FILE", calf.to_str().unwrap())];
+    let (got, rc) = run(
+        &[
+            "plan",
+            "--class",
+            "large",
+            "--now",
+            "1700038800",
+            "--tz-offset-min",
+            "0",
+        ],
+        "",
+        &env,
+    );
+    assert_eq!(rc, 4, "got={got}");
+    let last = got.lines().last().unwrap();
+    assert_eq!(pjson(last)["decision"], "DEFER");
+    // Off-peak → RUN NOW (exit 0).
+    let (got, rc) = run(
+        &[
+            "plan",
+            "--class",
+            "large",
+            "--now",
+            "1700000000",
+            "--tz-offset-min",
+            "0",
+        ],
+        "",
+        &env,
+    );
+    assert_eq!(rc, 0);
+    assert_eq!(pjson(got.lines().last().unwrap())["decision"], "RUN NOW");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// ── Track 1: gate snapshot-freshness fail-closed (the live→disk bridge) ───────────────────
+#[test]
+fn gate_snapshot_freshness_fails_closed() {
+    let cap: i64 = 1700000000;
+    // both windows present + clear, so a FRESH snapshot yields CLEAR→CONTINUE under default --window both.
+    let snap = format!(
+        r#"{{"captured_at":{cap},"rate_limits":{{"five_hour":{{"used_percentage":42,"resets_at":1750000000}},"seven_day":{{"used_percentage":10,"resets_at":1760000000}}}}}}"#
+    );
+    // (age, expected verdict, exit)
+    let cases = [
+        (0i64, "CONTINUE", 0),
+        (900, "CONTINUE", 0),
+        (901, "ASK", 20),
+        (-10, "ASK", 20),
+    ];
+    for (age, want, code) in cases {
+        let d = tmp(&format!("fresh{}", age.unsigned_abs()));
+        std::fs::write(d.join("ratelimit-snapshot.json"), &snap).unwrap();
+        let clock = (cap + age).to_string();
+        let env = [("I2P_COST_STATE_DIR", d.to_str().unwrap())];
+        let (got, rc) = run(&["gate", "--clock", &clock], r#"{"none":1}"#, &env);
+        assert_eq!(pjson(&got)["verdict"], want, "age={age} got={got}");
+        assert_eq!(rc, code, "age={age}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+// ── Track 1: L4 cheap resume (pause → checkpoint → set-pointer → resume → remaining) ──────
+#[test]
+fn ledger_cheap_resume() {
+    let d = tmp("resume");
+    let ds = d.to_str().unwrap();
+    run(
+        &[
+            "ledger", "init", ds, "j", "reviewer", "a,b,c,d", "500000", "15",
+        ],
+        "",
+        &[],
+    );
+    run(&["ledger", "mark-done", ds, "j", "a"], "", &[]);
+    // pause records a checkpoint carrying the LIVE ceiling snapshot that triggered it.
+    run(
+        &[
+            "ledger",
+            "pause",
+            ds,
+            "j",
+            "ceiling",
+            "85",
+            "1700003600",
+            "99000",
+            "1700000000",
+        ],
+        "",
+        &[],
+    );
+    let (st, _) = run(&["ledger", "status", ds, "j"], "", &[]);
+    let v = pjson(&st);
+    assert_eq!(v["state"], "paused");
+    let ck = &v["checkpoints"][0];
+    assert_eq!(ck["reason"], "ceiling");
+    assert_eq!(ck["five_hour_pct"], 85);
+    assert_eq!(ck["resets_at"], 1700003600i64);
+    assert_eq!(ck["spent_tokens"], 99000);
+    assert_eq!(ck["units_done"], 1);
+    assert_eq!(ck["units_remaining"], 3);
+    // a context pointer so resume reuses derived context instead of re-deriving it.
+    run(
+        &[
+            "ledger",
+            "set-pointer",
+            ds,
+            "j",
+            "cached_reviews_dir",
+            "doc/cached-reviews",
+        ],
+        "",
+        &[],
+    );
+    run(&["ledger", "resume", ds, "j"], "", &[]);
+    let (st, _) = run(&["ledger", "status", ds, "j"], "", &[]);
+    let v = pjson(&st);
+    assert_eq!(v["state"], "running"); // resumed
+    assert_eq!(v["checkpoints"].as_array().unwrap().len(), 1); // history preserved
+    assert_eq!(
+        v["context_pointers"]["cached_reviews_dir"],
+        "doc/cached-reviews"
+    ); // pointer survived
+       // remaining = only what's LEFT (a is done) — never re-run done units.
+    let (rem, _) = run(&["ledger", "remaining", ds, "j"], "", &[]);
+    assert_eq!(rem, "b\nc\nd\n");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// ── Track 1: PROBE → measure → CONTINUE arc ──────────────────────────────────────────────
+#[test]
+fn probe_then_measured_continue() {
+    let env = [("I2P_CALIBRATION_FILE", "/tmp/tf-none-probe.json")];
+    // class-only estimate → LOW confidence → PROBE (exit 3).
+    let (got, rc) = run(&["preflight", "--class", "large"], "", &env);
+    assert_eq!(rc, 3);
+    assert_eq!(pjson(&got)["verdict"], "PROBE");
+    // after measuring one unit, re-estimate with --measured-unit-tokens → HIGH → CONTINUE (exit 0).
+    let (got, rc) = run(
+        &[
+            "preflight",
+            "--name",
+            "reviewer-fanout",
+            "--width",
+            "26",
+            "--measured-unit-tokens",
+            "18000",
+        ],
+        "",
+        &env,
+    );
+    assert_eq!(rc, 0);
+    assert_eq!(pjson(&got)["verdict"], "CONTINUE");
+}
+
+// ── Track 1: registry ephemeral (session) vs durable (oscron) arming ─────────────────────
+#[test]
+fn registry_session_arming_cleared_on_reset() {
+    let d = tmp("sessionarm");
+    let ds = d.to_str().unwrap();
+    let env = [(
+        "I2P_MACHINE_REGISTRY",
+        d.join("m.json").to_str().unwrap().to_string(),
+    )];
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    run(
+        &[
+            "registry",
+            "register",
+            ds,
+            "j1",
+            "17 22 * * *",
+            "0",
+            "./l.json",
+            "./p.txt",
+            "",
+        ],
+        "",
+        &env,
+    );
+    // session arming is EPHEMERAL — reset-armed (a fresh session) clears it.
+    run(&["registry", "arm", ds, "j1", "session"], "", &env);
+    run(&["registry", "reset-armed", ds], "", &env);
+    let (got, _) = run(&["registry", "get", ds, "j1"], "", &env);
+    assert_eq!(pjson(&got)["armed"], false);
     let _ = std::fs::remove_dir_all(&d);
 }
 

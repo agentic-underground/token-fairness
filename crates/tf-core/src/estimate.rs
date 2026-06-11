@@ -58,7 +58,8 @@ pub struct Args<'a> {
 pub fn estimate(a: Args) -> Out {
     let profile: Option<Value> = a
         .profile_path
-        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(crate::state::resolve_profile)
+        .and_then(|p| std::fs::read_to_string(&p).ok())
         .and_then(|s| serde_json::from_str(&s).ok());
 
     let (name, width, per_unit, basis, confidence): (String, i64, i64, &str, &str);

@@ -4,6 +4,7 @@
   "description": "Apply the recovered cached adversarial reviews: one unit per doc/cached-reviews/<slug>.md, applying that review's confirmed capability-uplift to the target file it names. The off-peak test run of the token-aware scheduler — the SAFE completion of the job that locked the user out three times.",
   "unit": { "kind": "agent", "agent": "general-purpose" },
   "model": "claude-sonnet-4-6",
+  "cognition_class": "discernment",
   "tools_allowed": ["Read", "Edit", "Grep", "Glob"],
   "plugins_needed": [],
   "context": {

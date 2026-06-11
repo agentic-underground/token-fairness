@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "name": "lint-fanout",
+  "description": "Per-file lint/format checks — a DETERMINATIVE slice: there is one correct output, so it leaves the token economy entirely and runs as a tested handler (0 model tokens). The worked example from knowledge/cognition-routing.md: in a mixed fan-out, the determinative units cost $0 while the discernment units route to a model.",
+  "unit": { "kind": "handler", "agent": null },
+  "cognition_class": "determinative",
+  "determinative_handler": "./scripts/lint-check.sh",
+  "tools_allowed": [],
+  "plugins_needed": [],
+  "context": { "exclude_default_context": true, "station_scoped": true },
+  "fanout": { "width_default": 8, "max_parallel": 8, "stages": 1 },
+  "estimated_unit_tokens": 0,
+  "budget_directive_required": false,
+  "offpeak_eligible": true
+}

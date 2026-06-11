@@ -23,6 +23,33 @@ pub fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
+/// Resolve a `--profile` value to a path. An existing file is returned verbatim (so explicit
+/// paths stay byte-identical to the bash oracle — conformance unaffected). Otherwise the value
+/// is treated as a NAME and resolved, in order: a project override at
+/// `.i2p/job-profiles/<name>.json` (cwd-relative, the SKILL's override location), then the
+/// shipped `${CLAUDE_PLUGIN_ROOT}/profiles/<name>.json`. If nothing resolves, the value is
+/// returned unchanged (a non-existent literal path is still a no-op load, exactly as before).
+pub fn resolve_profile(value: &str) -> String {
+    if Path::new(value).is_file() {
+        return value.to_string();
+    }
+    let name = value.strip_suffix(".json").unwrap_or(value);
+    let mut candidates = vec![format!(".i2p/job-profiles/{}.json", name)];
+    if let Ok(root) = std::env::var("CLAUDE_PLUGIN_ROOT") {
+        candidates.push(format!(
+            "{}/profiles/{}.json",
+            root.trim_end_matches('/'),
+            name
+        ));
+    }
+    for c in candidates {
+        if Path::new(&c).is_file() {
+            return c;
+        }
+    }
+    value.to_string()
+}
+
 /// `~/.claude/state/i2p-cost` — overridable by `I2P_COST_STATE_DIR` (as in the bash).
 pub fn state_dir() -> String {
     if let Ok(d) = std::env::var("I2P_COST_STATE_DIR") {
@@ -105,7 +132,10 @@ pub fn digits_or(s: &str, default: i64) -> i64 {
 
 /// The RAW literal token for `"key":` in a flat one-line JSON object — what jq 1.6+ passes
 /// through verbatim (number literals are preserved: `1.0500`/`50.0` are NOT normalised).
-/// Keys must be unique in the text. Strips quotes for string values; "" if absent.
+/// Keys must be unique in the text. Strips quotes for string values; "" if absent. The bare-value
+/// branch captures any unquoted JSON literal — numbers AND `true`/`false`/`null` (alphanumerics) —
+/// so a boolean like `in_offpeak` reads as `"true"`/`"false"` exactly as the bash `jq -r` did
+/// (the numeric-only version returned "" for booleans, wrongly DEFERRING every off-peak gate).
 pub fn raw_field(json: &str, key: &str) -> String {
     let needle = format!("\"{}\":", key);
     let Some(p) = json.find(&needle) else {
@@ -116,7 +146,7 @@ pub fn raw_field(json: &str, key: &str) -> String {
         after.split('"').next().unwrap_or("").to_string()
     } else {
         rest.chars()
-            .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
             .collect()
     }
 }

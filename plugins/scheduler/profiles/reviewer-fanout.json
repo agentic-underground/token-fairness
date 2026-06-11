@@ -4,6 +4,7 @@
   "description": "One adversarial reviewer pass per file — the shape of the job that locked the user out three times. Throttled, profiled, and budget-gated so it never can again.",
   "unit": { "kind": "agent", "agent": "foundry:reviewer" },
   "model": "claude-haiku-4-5",
+  "cognition_class": "discernment",
   "tools_allowed": ["Read", "Grep", "Glob"],
   "plugins_needed": ["foundry"],
   "context": {
