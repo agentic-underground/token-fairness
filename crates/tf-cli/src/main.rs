@@ -4,10 +4,16 @@
 //! the old `scheduler.sh …` verbs) and, later, an MCP stdio server. This is the CLI front
 //! door; the determinism lives in `tf-core`.
 
+mod offpeak_run;
+mod oscron;
+
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read};
 use std::process::exit;
-use tf_core::{calibrate, ceiling, estimate, offpeak, Out};
+use tf_core::{
+    calibrate, ceiling, estimate, ledger, offpeak, registry, report, routing, scheduler, signal,
+    snapshot, Out,
+};
 
 /// Lenient flag parser: accepts `--flag value` and `--flag=value`, collects bare
 /// positionals in order, and ignores unknown leading dashes (as the bash `*) shift` did).
@@ -97,7 +103,11 @@ fn main() {
         }
         "ceiling-check" => {
             let payload = read_stdin();
-            ceiling::check(a.flag("headroom").unwrap_or("15"), a.flag("window").unwrap_or("both"), &payload)
+            ceiling::check(
+                a.flag("headroom").unwrap_or("15"),
+                a.flag("window").unwrap_or("both"),
+                &payload,
+            )
         }
         "estimate" => estimate::estimate(estimate::Args {
             profile_path: a.flag("profile"),
@@ -122,6 +132,21 @@ fn main() {
             reserve: a.flag("morning-reserve").unwrap_or("60"),
             window_hours: a.flag("window-hours").unwrap_or("5"),
         }),
+        "ledger" => ledger::dispatch(rest),
+        "registry" => registry::dispatch(rest),
+        "snapshot" => snapshot::dispatch(&read_stdin()),
+        "verify-payload" => signal::verify_payload(rest.first().map(|s| s.as_str()), &read_stdin()),
+        "signal" => signal::dispatch(rest),
+        "report" => report::dispatch(rest),
+        "gate" => scheduler::gate(rest, &read_stdin()),
+        "plan" => scheduler::plan(rest),
+        "plan-open" => scheduler::plan_open(rest),
+        "plan-close" => scheduler::plan_close(rest),
+        "preflight" => scheduler::preflight(rest),
+        "preflight-fanout" => scheduler::preflight_fanout(&read_stdin()),
+        "oscron" => oscron::dispatch(rest),
+        "run-offpeak" => offpeak_run::run(rest),
+        "route" => routing::route(rest),
         "" => Out::err("usage: tf <command> [args]", 2),
         other => Out::err(format!("tf: unknown command '{}'", other), 2),
     };

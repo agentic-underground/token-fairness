@@ -22,7 +22,9 @@ fn class_seed(class: &str) -> Option<i64> {
 }
 
 fn is_pos_int(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && s.parse::<i64>().map(|n| n > 0).unwrap_or(false)
+    !s.is_empty()
+        && s.bytes().all(|b| b.is_ascii_digit())
+        && s.parse::<i64>().map(|n| n > 0).unwrap_or(false)
 }
 
 fn all_digits(s: &str) -> bool {

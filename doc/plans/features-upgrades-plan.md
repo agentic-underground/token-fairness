@@ -1,6 +1,18 @@
 # Token-Fairness — Remaining Phases: Features & Upgrades Plan
 *(adversarially reviewed — destined for `~/Code/token-fairness/doc/plans/features-upgrades-plan.md`)*
 
+> **STATUS — COMPLETE.** All Phase-1 stateful/orchestration verbs are ported and conformance-proven
+> (119 differential cases vs the pinned bash oracle, incl. state-file diffs + the full convergence
+> loop; 15 self-contained `cargo test` frozen vectors; `cargo fmt`/`clippy -D warnings` clean). The
+> `scheduler` plugin is packaged into a single-plugin marketplace with a bash-shim → per-arch binary,
+> the session.json `.tokens` Stop-writer (review C3), and a single-plugin `verify-prereqs.sh` (review
+> W6). Cutover Release 1 (resolver fallback, never deleting the bash) is documented in
+> [`doc/cutover.md`](../cutover.md). Phase 2 cognition routing ships as `tf route` +
+> [`knowledge/cognition-routing.md`](../../plugins/scheduler/knowledge/cognition-routing.md); Phase 3
+> is the concrete minimum spec in
+> [`knowledge/determinism-transfer.md`](../../plugins/scheduler/knowledge/determinism-transfer.md).
+> The sections below are retained as the executed specification.
+
 ## 0. How to read this
 
 This is a **cold-start execution plan** for finishing the port of the token-aware scheduler

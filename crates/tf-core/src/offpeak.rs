@@ -66,7 +66,9 @@ pub fn window(a: WindowArgs) -> Out {
     let now: i64 = a.now.parse().unwrap();
 
     let tzoff: i64 = match a.tz_offset_min {
-        Some(t) if !t.is_empty() && t != "-" => t.parse().unwrap_or_else(|_| machine_tzoff_or_zero(t)),
+        Some(t) if !t.is_empty() && t != "-" => {
+            t.parse().unwrap_or_else(|_| machine_tzoff_or_zero(t))
+        }
         _ => machine_tzoff(),
     };
 
@@ -88,7 +90,10 @@ pub fn window(a: WindowArgs) -> Out {
             let mtr = (reset - now) / 60;
             let rsod = local_sod(reset, tzoff);
             let riw = in_window(rsod, start_sec, end_sec);
-            (mtr.to_string(), if riw { "true".into() } else { "false".into() })
+            (
+                mtr.to_string(),
+                if riw { "true".into() } else { "false".into() },
+            )
         }
         _ => ("null".into(), "null".into()),
     };

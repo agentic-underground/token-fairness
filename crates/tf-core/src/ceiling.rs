@@ -64,9 +64,9 @@ pub fn check(headroom: &str, window: &str, payload: &str) -> Out {
         _ => {
             return Out::line(
                 format!(
-                    "{{\"verdict\":\"NO_SIGNAL\",\"reason\":\"bad-headroom\",\"headroom\":\"{}\"}}\n",
-                    headroom
-                ),
+                "{{\"verdict\":\"NO_SIGNAL\",\"reason\":\"bad-headroom\",\"headroom\":\"{}\"}}\n",
+                headroom
+            ),
                 20,
             )
         }
@@ -78,7 +78,9 @@ pub fn check(headroom: &str, window: &str, payload: &str) -> Out {
     let ceiling = 100 - hr;
 
     let breaches = |pct: &str| -> bool {
-        pct.parse::<f64>().map(|p| p >= ceiling as f64).unwrap_or(false)
+        pct.parse::<f64>()
+            .map(|p| p >= ceiling as f64)
+            .unwrap_or(false)
     };
 
     let eval = |key: &str| -> (WinState, Option<String>, Option<String>) {

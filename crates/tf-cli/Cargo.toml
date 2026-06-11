@@ -10,3 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 tf-core = { path = "../tf-core" }
+# libc only for the single-instance flock in `run-offpeak` (the OS-cron entry point);
+# a single syscall, negligible binary-size cost.
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }

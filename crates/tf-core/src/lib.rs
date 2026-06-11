@@ -6,12 +6,19 @@
 //! All *parsing* uses serde_json; all *output* is hand-formatted (see [`fmt`]) so the
 //! conformance vectors captured from the bash pass bit-for-bit.
 
-pub mod fmt;
-pub mod state;
 pub mod calibrate;
 pub mod ceiling;
 pub mod estimate;
+pub mod fmt;
+pub mod ledger;
 pub mod offpeak;
+pub mod registry;
+pub mod report;
+pub mod routing;
+pub mod scheduler;
+pub mod signal;
+pub mod snapshot;
+pub mod state;
 
 /// The uniform result of a CLI verb: what to print where, and the process exit code.
 /// Modelled on the bash scripts, which write a JSON line to stdout (or an advisory
@@ -26,14 +33,26 @@ pub struct Out {
 impl Out {
     /// stdout line, exit 0.
     pub fn ok(s: impl Into<String>) -> Out {
-        Out { stdout: s.into(), stderr: String::new(), code: 0 }
+        Out {
+            stdout: s.into(),
+            stderr: String::new(),
+            code: 0,
+        }
     }
     /// stdout line, explicit exit code.
     pub fn line(s: impl Into<String>, code: i32) -> Out {
-        Out { stdout: s.into(), stderr: String::new(), code }
+        Out {
+            stdout: s.into(),
+            stderr: String::new(),
+            code,
+        }
     }
     /// stderr message, explicit exit code.
     pub fn err(msg: impl Into<String>, code: i32) -> Out {
-        Out { stdout: String::new(), stderr: msg.into(), code }
+        Out {
+            stdout: String::new(),
+            stderr: msg.into(),
+            code,
+        }
     }
 }

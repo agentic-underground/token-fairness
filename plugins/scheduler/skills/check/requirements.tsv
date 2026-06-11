@@ -1,0 +1,11 @@
+# name	probe-command	tier	install-hint
+# Canonical dependency manifest for TOKEN-FAIRNESS (scheduler). TAB-separated (4 fields).
+# The deterministic core is a self-contained static binary (bin/tf) — zero runtime deps. The
+# hooks and the session.json writer use jq; off-peak cron uses flock + the claude CLI. Everything
+# degrades gracefully (a missing tool narrows a capability, never a false "safe").
+bash	command -v bash	required	preinstalled (the hook shim hooks/tf-hook.sh is bash)
+tf	test -x ${CLAUDE_PLUGIN_ROOT}/bin/tf-$(uname -m)-$(uname -s | tr A-Z a-z) || command -v tf	required	ships per-arch under bin/; build with `cargo build --release` or `cargo install`
+jq	command -v jq	recommended	apt install jq (session-tokens .tokens writer + startup-report; the binary itself needs no jq)
+flock	command -v flock	optional	util-linux (single-instance guard for OS-cron off-peak runs; degrades to a bare lock)
+claude	command -v claude	optional	the Claude Code CLI — only the headless off-peak runner (`tf run-offpeak`) needs it
+crontab	command -v crontab	optional	cron (durable OS-level arming via `tf oscron`; in-session CronCreate works without it)

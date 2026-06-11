@@ -1,0 +1,12 @@
+# model-prices.tsv — USD per 1,000,000 tokens, used by capture-cost.sh to derive the
+# lifecycle/phase $ from transcript token counts. Matched by PREFIX (a model id matches
+# the first row whose prefix it starts with). SESSION $ on the HUD uses the harness's
+# authoritative cost.total_cost_usd; this map is only for per-phase attribution (approximate).
+#
+# SELF-IMPROVING: update when Anthropic pricing changes. cache_write is the 5-minute-TTL
+# rate (1.25x input); cache_read is 0.1x input. Source: the claude-api skill price table.
+#
+# prefix<TAB>input<TAB>output<TAB>cache_write_5m<TAB>cache_read
+claude-opus-4	5.00	25.00	6.25	0.50
+claude-sonnet-4	3.00	15.00	3.75	0.30
+claude-haiku-4	1.00	5.00	1.25	0.10

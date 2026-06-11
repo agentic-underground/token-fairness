@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Parsing only. All OUTPUT is hand-formatted (see fmt.rs) to stay byte-faithful to the
-# bash printf/jq the conformance vectors were captured from.
+# Parsing only for the arithmetic verbs (all output hand-formatted, see fmt.rs). The
+# stateful verbs (ledger/registry/snapshot/signal) DO serialize JSON state files; we use
+# preserve_order so the on-disk key order matches the bash's jq insertion-order writes,
+# keeping `status`/`list`/`get` byte-faithful to the oracle.
 [dependencies]
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }

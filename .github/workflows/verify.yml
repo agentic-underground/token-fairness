@@ -1,0 +1,84 @@
+name: verify
+
+# The CI gate for token-fairness. Two proofs of correctness plus the marketplace invariant:
+#   1. cargo test            — self-contained frozen-vector conformance (no bash needed)
+#   2. tests/conformance.sh  — byte-for-byte differential vs the pinned bash oracle
+#   3. verify-prereqs.sh     — single-plugin marketplace soundness (manifests, bin↔build parity)
+# and it cross-compiles the per-arch binaries the plugin ships under plugins/scheduler/bin/.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: cargo test + fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+      # The differential gate needs jq + the bash oracle. The oracle is pinned by SHA in
+      # conformance.sh; CI checks it out beside this repo. (Skipped if the oracle is unavailable.)
+      - name: differential conformance (best-effort)
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          cargo build
+          if git clone --depth 50 https://github.com/whatbirdisthat/idea-to-production /tmp/i2p 2>/dev/null; then
+            ( cd /tmp/i2p && git checkout 0b46ff35cb746ad14ac165431f93dcb613b517a8 2>/dev/null || true )
+            BASH_DIR=/tmp/i2p/plugins/concierge/scheduler TF="$PWD/target/debug/tf" bash tests/conformance.sh
+          else
+            echo "::warning::bash oracle unavailable — skipped the differential gate (cargo frozen vectors still ran)"
+          fi
+
+  marketplace:
+    name: single-plugin marketplace invariant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y jq
+      # The host binary the verify script smoke-tests.
+      - run: cargo build --release
+      - run: |
+          ARCH=$(uname -m); mkdir -p plugins/scheduler/bin
+          cp target/release/tf "plugins/scheduler/bin/tf-${ARCH}-linux"
+      - run: bash scripts/verify-prereqs.sh
+
+  cross-build:
+    name: cross-compile per-arch binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl   # static linux
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: install cross linker (linux musl)
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: install aarch64 musl cross
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross || true
+      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tf-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/tf

@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "name": "reviewer-fanout",
+  "description": "One adversarial reviewer pass per file — the shape of the job that locked the user out three times. Throttled, profiled, and budget-gated so it never can again.",
+  "unit": { "kind": "agent", "agent": "foundry:reviewer" },
+  "model": "claude-haiku-4-5",
+  "tools_allowed": ["Read", "Grep", "Glob"],
+  "plugins_needed": ["foundry"],
+  "context": {
+    "load": ["doc/cached-reviews/<unit>.md"],
+    "exclude_default_context": true,
+    "station_scoped": true
+  },
+  "fanout": { "width_default": 26, "max_parallel": 4, "stages": 4 },
+  "estimated_unit_tokens": 18000,
+  "budget_directive_required": true,
+  "offpeak_eligible": true
+}

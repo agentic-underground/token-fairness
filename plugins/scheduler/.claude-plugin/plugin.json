@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "scheduler",
+  "displayName": "TOKEN-FAIRNESS — The token-aware job scheduler",
+  "version": "0.1.0",
+  "description": "A fair, defensive guardian for a solo builder's usage meter — the standalone successor to CONCIERGE's bash token-scheduler, ported to a single tested Rust binary (tf). Before any wide fan-out it ESTIMATES cost (with an estimate→actual EWMA that converges over the shared ~/.claude/state/i2p-cost/calibration.json), REQUIRES an explicit +Xk budget, throttles waves (≤4, not 130), and GATES every wave against the LIVE rolling rate-limit window (fail-closed) — halting before a paid lockout and resuming cheaply from a per-job ledger (.i2p/jobs/<id>.json) that records only what's LEFT. Supervised off-peak (22:00–08:00) runs reserve a morning allowance. The live signal reaches non-hook code via a freshness-stamped snapshot (a Stop/SessionStart/PostToolUse hook, no-op when the payload lacks rate_limits); a PreToolUse(Agent|Task) backstop auto-denies a spawn at the live ceiling. Scheduled jobs are DURABLE & session-safe (project .i2p/scheduled-jobs.json + a per-machine index), re-armed by a SessionStart report after a crash/restart, and OS-cron-installable so they fire with Claude closed. A Stop hook writes session.json .tokens — the actual-spend signal that makes convergence work. Determinism is proven by cargo frozen-vectors + a byte-for-byte differential against the original bash. /schedule routes a job; the token-scheduler skill is the discipline that calls tf.",
+  "author": {
+    "name": "whatbirdisthat",
+    "email": "95787+whatbirdisthat@users.noreply.github.com",
+    "url": "https://github.com/whatbirdisthat"
+  },
+  "homepage": "https://github.com/whatbirdisthat/token-fairness/tree/master/plugins/scheduler",
+  "repository": "https://github.com/whatbirdisthat/token-fairness",
+  "license": "MIT OR Apache-2.0",
+  "category": "workflow",
+  "defaultEnabled": true,
+  "keywords": [
+    "token-budget",
+    "rate-limit",
+    "scheduler",
+    "fan-out",
+    "cost-estimate",
+    "calibration",
+    "off-peak",
+    "lockout-prevention",
+    "hooks",
+    "cron",
+    "convergence",
+    "cognition-routing"
+  ],
+  "metadata": {
+    "note": "skills/, commands/, and hooks/hooks.json are auto-discovered from the plugin root. The determinism lives in the per-arch `tf` binary under bin/, invoked from hooks via hooks/tf-hook.sh (a bash shim — a compiled binary fails verify-prereqs Check L's `bash -n`). Hooks: PreToolUse(Agent|Task)→preflight-fanout (live-ceiling spawn veto); SessionStart→snapshot + startup-report (durable-job re-arm + brief convergence dashboard) + inject-token-safety (injects the TOKEN SAFETY plan-mode protocol as additionalContext, repointed at the resolved tf binary, so the bracket-every-plan discipline governs every repo) + offer-scheduler (one-time-per-machine nudge); PostToolUse→snapshot; Stop→snapshot + session-tokens (the session.json .tokens actual-spend writer that makes the estimator converge — review C3). OS-cron is installable via `tf oscron install` (the crontab line invokes hooks/run-offpeak.sh → `tf run-offpeak`). Ships NO .mcp.json. Canonical reference: knowledge/token-aware-scheduling.md; the Phase-2 model-routing extension: knowledge/cognition-routing.md. Pricing canon for $-estimates: statusline/model-prices.tsv."
+  }
+}

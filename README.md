@@ -23,32 +23,50 @@ authoring the bash never had.
 
 ## Status
 
-**Phase 1 — faithful 1:1 port (in progress).** The port reproduces the bash behaviour
-bit-for-bit; the original bash test inputs are the conformance gate.
+**Complete — the full port, packaged as a marketplace.** Every verb of the bash scheduler is
+reproduced by `tf` and proven two ways: `cargo test` (self-contained frozen vectors, the CI gate)
+and `tests/conformance.sh` (a byte-for-byte differential against the bash oracle, pinned to its
+commit SHA, covering stdout, exit codes, **and every written state file**). 119 differential cases
++ 15 frozen-vector tests, all green.
 
-Ported & conformance-proven (`tf` ⇔ bash, byte-exact output + exit codes):
+Ported & conformance-proven (`tf` ⇔ bash, byte-exact output + exit codes + state files):
 
 | Module | bash origin | `tf` verb(s) |
 |---|---|---|
 | calibrate (EWMA + Welford convergence) | `calibrate.sh` | `calibrate {ratio,close,confidence}` |
 | ceiling guard (live rate-limit window) | `ceiling-check.sh` | `ceiling-check` |
 | pre-flight estimator | `scheduler-estimate.sh` | `estimate` |
-| off-peak window clock | `offpeak-window.sh` | `offpeak-window` |
-| overnight budget calculator | `offpeak-budget.sh` | `offpeak-budget` |
+| off-peak window clock + budget | `offpeak-window.sh` / `offpeak-budget.sh` | `offpeak-window` / `offpeak-budget` |
+| cheap-resume ledger | `job-ledger.sh` | `ledger {init,mark-done,mark-failed,remaining,pause,resume,set-offpeak,set-pointer,status}` |
+| durable job registry | `jobs-registry.sh` | `registry {register,list,get,arm,reset-armed,remove}` |
+| live→disk snapshot bridge | `ratelimit-snapshot.sh` | `snapshot` |
+| signal probe + payload recorder | `signal-probe.sh` / `verify-payload.sh` | `signal {conclude,verdict,report}` / `verify-payload` |
+| convergence report | `report.sh` | `report [--scheduled\|--estimator\|--brief]` |
+| dispatcher (plan/gate/preflight) | `scheduler.sh` / `preflight-fanout.sh` | `gate` `plan` `plan-open` `plan-close` `preflight` `preflight-fanout` |
+| OS-cron install + headless runner | `install-oscron.sh` / `run-offpeak-job.sh` | `oscron {install,uninstall}` / `run-offpeak` |
+| **cognition routing (Phase 2)** | *new* | `route --cognition <class>` → best-fit model + $-cost band |
 
-Remaining Phase 1: the stateful modules (ledger, registry, snapshot, signal, report), the
-`scheduler.sh` plan/gate orchestration, oscron, then plugin packaging + cutover.
+Shipped as the **`scheduler` plugin** under [`plugins/scheduler/`](plugins/scheduler/) in a
+single-plugin marketplace ([`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)):
+a per-arch `tf` binary in `bin/`, invoked from hooks via a `bash` shim
+([`hooks/tf-hook.sh`](plugins/scheduler/hooks/tf-hook.sh)), the `token-scheduler` skill + `/schedule`
+command, the knowledge canon, and a Stop-hook `session.json .tokens` writer so the estimator keeps
+converging on its own. Retirement of the idea-to-production bash is sequenced in
+[`doc/cutover.md`](doc/cutover.md) — Release 1 ships a resolver fallback; the bash is never deleted in
+the introducing release.
 
-Phases 2–3 then add cognition-class **model routing** (determinative → mechanical → discernment
-→ thought-intensive) and the **determinism-transfer** registry — *automate once, clamp the cost
-of deterministic processes permanently.*
+**Phase 3 — determinism transfer** (the clamp registry behind determinative routing) is specified as
+a minimum, concrete spec in
+[`plugins/scheduler/knowledge/determinism-transfer.md`](plugins/scheduler/knowledge/determinism-transfer.md);
+it stays a spec until a real clamp candidate appears.
 
 ## Build & test
 
 ```sh
-cargo build --release          # the tf binary
+cargo build --release          # the tf binary (→ plugins/scheduler/bin/tf-<arch>-<os>)
 cargo test                     # self-contained frozen-vector conformance (no bash needed)
-BASH_DIR=… TF=… bash tests/conformance.sh   # live differential proof vs the bash original
+BASH_DIR=… TF=… bash tests/conformance.sh   # live differential proof vs the pinned bash oracle
+bash scripts/verify-prereqs.sh # single-plugin marketplace soundness (manifests, bin↔build parity)
 ```
 
 ### A note on floating point

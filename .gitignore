@@ -1,2 +1,4 @@
 /target
 *.tmp.*
+# Project-local runtime state (job registry + ledgers), not source — like the bash's .i2p/.
+/.i2p/
