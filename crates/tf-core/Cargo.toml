@@ -1,0 +1,10 @@
+[package]
+name = "tf-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Parsing only. All OUTPUT is hand-formatted (see fmt.rs) to stay byte-faithful to the
+# bash printf/jq the conformance vectors were captured from.
+[dependencies]
+serde_json = "1"

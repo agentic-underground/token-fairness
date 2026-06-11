@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/tf-core", "crates/tf-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/whatbirdisthat/token-fairness"
+
+# A scheduler that runs on hot hooks wants the smallest, fastest binary we can ship.
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1
