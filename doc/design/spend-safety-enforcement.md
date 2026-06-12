@@ -99,7 +99,21 @@ Plus frozen-vector unit tests per piece, honouring the llvm-cov gate (`.github/w
 **CORE-A → CORE-B → CORE-C** (lifts freeze) → **P-D → P-E → P-F → P-G → P-H** — red-team run as the gate
 before the freeze lifts. Each piece independently approvable; the CORE three are mandatory prerequisites.
 
-## Honest residual risk (certainty names what is NOT absolute)
+## Freeze-lift checklist (status)
+The FAN-OUT FREEZE lifts only when all are ✓:
+- [x] CORE-A `tf budget` (caps + arm/check) — built, on master.
+- [x] CORE-B `tf preflight-spend` + `PreToolUse(Workflow|Agent|Task)` hook — logic built & wired, on master.
+- [x] CORE-C `tf spend` transcript audit + reconciliation — built, on master.
+- [x] `tests/red-team-spend.sh` — INV-1/2/3 pass (7/7); INV-4/5 tracked as pending P-D/P-E.
+- [ ] **Live matcher probe (NEXT SESSION, the one unproven link).** The new hook loads only at
+      SessionStart, so it cannot be exercised in the session that wrote it. First action of a fresh session:
+      with caps set and **nothing armed**, launch a **no-op workflow** (a script with ZERO `agent()` calls —
+      safe even if the gate misses: nothing can fan out). If the launch is **denied** → `PreToolUse` fires
+      for `Workflow`, INV-1 is hook-enforced, **lift the freeze**. If it **runs** → the matcher does not
+      cover `Workflow`; keep the freeze and fall back to mandatory `budget.total` + the `tf spend` audit,
+      and raise the gap upstream.
+
+
 1. **Harness `Workflow` matcher** — unverified; checked FIRST in CORE-B. If absent, INV-1 leans on mandatory
    `budget.total` + reconciliation, gap filed upstream.
 2. **Model tier is audited, not prohibited** (except fable) — opus-on-cheap-work is visible, not impossible.
