@@ -160,6 +160,7 @@ fn main() {
         "run-offpeak" => offpeak_run::run(rest),
         "route" => routing::route(rest),
         "budget" => budget::dispatch(rest),
+        "preflight-spend" => budget::preflight_spend(&read_stdin()),
         "spend" => spend::dispatch(rest),
         "" => Out::err("usage: tf <command> [args]", 2),
         other => Out::err(format!("tf: unknown command '{}'", other), 2),

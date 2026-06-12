@@ -74,6 +74,74 @@ fn spent_since(baseline: i64) -> i64 {
     (session_tokens() - baseline).max(0)
 }
 
+/// One-shot record that a fan-out's budget has been declared+approved (its `+Xk`). The blocking
+/// preflight REQUIRES this for a `Workflow` launch — a Workflow with no arm is the incident.
+fn arm_file() -> String {
+    format!("{}/fanout-arm.json", state::state_dir())
+}
+
+fn read_arm() -> Option<i64> {
+    state::read_json(&arm_file()).map(|v| state::int(&v, "est", 0))
+}
+
+/// PURE: the blocking-hook decision for a PreToolUse on a spawn tool. None = allow, Some = deny
+/// reason. `Workflow` is always a fan-out → it must be ARMED within caps; `Agent`/`Task` are
+/// allowed until the session cap is reached (so ordinary single-agent work is never bricked).
+pub fn gate_spend(
+    tool: &str,
+    armed: Option<i64>,
+    session_cap: i64,
+    per_fanout_cap: i64,
+    spent: i64,
+) -> Option<String> {
+    match tool {
+        "Workflow" => match armed {
+            None => Some(
+                "fan-out has no declared budget — run `tf budget arm <est>` (your +Xk) first"
+                    .into(),
+            ),
+            Some(est) => match decide(session_cap, per_fanout_cap, spent, est) {
+                (true, _) => None,
+                (false, reason) => Some(format!("fan-out budget refused: {}", reason)),
+            },
+        },
+        "Agent" | "Task" => {
+            if spent >= session_cap {
+                Some(format!(
+                    "session token cap reached ({}/{}). Raise with `tf budget set --session-cap` or `--reset`.",
+                    spent, session_cap
+                ))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `tf preflight-spend` — the PreToolUse blocking-hook body. Emits the SAME deny contract the
+/// ceiling gate uses (`hookSpecificOutput.permissionDecision=deny`), else allows silently.
+pub fn preflight_spend(payload: &str) -> Out {
+    if payload.trim().is_empty() {
+        return Out::default();
+    }
+    let v: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
+    let tool = v.get("tool_name").and_then(|x| x.as_str()).unwrap_or("");
+    let (session_cap, per_fanout_cap, baseline) = load_cfg();
+    let spent = spent_since(baseline);
+    if let Some(reason) = gate_spend(tool, read_arm(), session_cap, per_fanout_cap, spent) {
+        let deny = serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason
+            }
+        });
+        return Out::ok(serde_json::to_string(&deny).unwrap_or_default() + "\n");
+    }
+    Out::default()
+}
+
 /// Minimal flag reader: `--key value` / `--key=value`; presence-only flags via `has`.
 fn flag<'a>(argv: &'a [String], key: &str) -> Option<&'a str> {
     let pfx = format!("--{}", key);
@@ -166,8 +234,32 @@ pub fn dispatch(argv: &[String]) -> Out {
             Out::line(line, if ok { 0 } else { DENY_CODE })
         }
 
+        // tf budget arm <est> — declare a fan-out's budget (its +Xk). Refuses to arm an over-cap est.
+        "arm" => {
+            let est = state::digits_or(rest.first().map(|s| s.as_str()).unwrap_or(""), 0);
+            let (session_cap, per_fanout_cap, baseline) = load_cfg();
+            let (ok, reason) = decide(session_cap, per_fanout_cap, spent_since(baseline), est);
+            if !ok {
+                return Out::line(
+                    format!("{{\"armed\":false,\"reason\":\"{}\",\"est\":{}}}\n", reason, est),
+                    DENY_CODE,
+                );
+            }
+            let doc = serde_json::json!({ "est": est, "at": state::now_epoch() });
+            if state::write_json(&arm_file(), &doc).is_err() {
+                return Out::err(format!("budget: cannot write {}", arm_file()), 2);
+            }
+            Out::ok(format!("{{\"armed\":true,\"est\":{}}}\n", est))
+        }
+
+        // tf budget disarm — clear the arm (the launch wrapper calls this post-launch; one-shot hygiene).
+        "disarm" => {
+            let _ = std::fs::remove_file(arm_file());
+            Out::ok("{\"armed\":false}\n".to_string())
+        }
+
         _ => Out::err(
-            "usage: tf budget {set [--session-cap N] [--per-fanout-cap N] [--reset]|status|spent|check <est>}",
+            "usage: tf budget {set [--session-cap N] [--per-fanout-cap N] [--reset]|status|spent|check <est>|arm <est>|disarm}",
             2,
         ),
     }
@@ -224,5 +316,36 @@ mod tests {
     #[test]
     fn saturating_add_does_not_overflow() {
         assert!(decide(i64::MAX, i64::MAX, i64::MAX, i64::MAX).0);
+    }
+
+    #[test]
+    fn workflow_without_arm_is_denied() {
+        // INV-1, structural: a Workflow fan-out with no declared budget — the incident.
+        assert!(gate_spend("Workflow", None, 2_000_000, 150_000, 0).is_some());
+    }
+
+    #[test]
+    fn workflow_armed_within_caps_is_allowed() {
+        assert!(gate_spend("Workflow", Some(120_000), 2_000_000, 150_000, 0).is_none());
+    }
+
+    #[test]
+    fn workflow_armed_over_cap_is_denied() {
+        // The 605k runaway, even if someone armed it.
+        assert!(gate_spend("Workflow", Some(605_000), 2_000_000, 150_000, 0).is_some());
+    }
+
+    #[test]
+    fn single_agent_allowed_until_session_cap() {
+        // Ordinary single-agent work must NOT be bricked — only blocked once over the session cap.
+        assert!(gate_spend("Agent", None, 1_000, 150_000, 999).is_none());
+        assert!(gate_spend("Agent", None, 1_000, 150_000, 1_000).is_some());
+        assert!(gate_spend("Task", None, 1_000, 150_000, 1_000).is_some());
+    }
+
+    #[test]
+    fn non_spawn_tools_are_never_gated() {
+        assert!(gate_spend("Read", None, 0, 0, 999_999).is_none());
+        assert!(gate_spend("Bash", Some(0), 0, 0, 999_999).is_none());
     }
 }
