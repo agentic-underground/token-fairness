@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::io::{IsTerminal, Read};
 use std::process::exit;
 use tf_core::{
-    calibrate, ceiling, estimate, ledger, offpeak, registry, report, routing, scheduler, signal,
-    snapshot, Out,
+    budget, calibrate, ceiling, estimate, ledger, offpeak, registry, report, routing, scheduler,
+    signal, snapshot, Out,
 };
 
 /// Lenient flag parser: accepts `--flag value` and `--flag=value`, collects bare
@@ -159,6 +159,7 @@ fn main() {
         "oscron" => oscron::dispatch(rest),
         "run-offpeak" => offpeak_run::run(rest),
         "route" => routing::route(rest),
+        "budget" => budget::dispatch(rest),
         "" => Out::err("usage: tf <command> [args]", 2),
         other => Out::err(format!("tf: unknown command '{}'", other), 2),
     };

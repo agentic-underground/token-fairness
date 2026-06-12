@@ -6,6 +6,7 @@
 //! All *parsing* uses serde_json; all *output* is hand-formatted (see [`fmt`]) so the
 //! conformance vectors captured from the bash pass bit-for-bit.
 
+pub mod budget;
 pub mod calibrate;
 pub mod ceiling;
 pub mod ensemble;
