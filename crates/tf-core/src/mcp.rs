@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_tool_gate() {
-        let params = json!({"ceiling": {"used_pct": 50}});
+        let params = json!({"ceiling": {"used_pct": 50, "headroom": 15}});
         let result = dispatch_tool("tf_gate", &params);
         assert!(result.is_ok());
         let value = result.unwrap();
