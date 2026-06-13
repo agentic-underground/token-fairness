@@ -53,18 +53,22 @@ while IFS= read -r f; do
 done < <(find "$PLUGIN" -name '*.sh' -type f)
 [ "$script_ok" = 1 ] && ok "bash -n clean on every shipped .sh"
 
-printf '\n== D. per-arch binary present + smoke ==\n'
+printf '\n== D. binary resolution: local smoke OR lazy-download wiring ==\n'
 arch="$(uname -m)"; os="$(uname -s | tr 'A-Z' 'a-z')"; case "$os" in linux*) os=linux;; darwin*) os=darwin;; esac
 BIN="$PLUGIN/bin/tf-${arch}-${os}"
+SHIM="$PLUGIN/hooks/tf-hook.sh"
 if [ -x "$BIN" ]; then
+  # A locally built/cached binary is present (the CI build path, and any dev tree) — smoke it.
   ok "bin/tf-${arch}-${os} present + executable"
   out="$("$BIN" offpeak-window --now 1700000000 --tz-offset-min 0 2>/dev/null)"
   echo "$out" | jq -e '.in_offpeak != null' >/dev/null 2>&1 && ok "binary smoke-runs (deterministic offpeak-window)" || bad "binary smoke failed"
 else
-  bad "no per-arch binary for ${arch}-${os} (build with cargo build --release)"
+  # No committed binary (the shipped end-user tree): the shim MUST lazy-download it from a release.
+  ok "no committed binary for ${arch}-${os} — verifying lazy-download wiring instead"
+  grep -q 'releases/download' "$SHIM" && ok "shim downloads the per-arch asset from a release" || bad "shim has no release-download path"
+  grep -qE 'sha256|shasum|SHA256SUMS' "$SHIM" && ok "shim checksum-verifies the download" || bad "shim does not verify the download checksum"
+  [ -f "$PLUGIN/bin/README.md" ] && ok "bin/README.md documents lazy-download" || bad "bin/README.md missing (explain the empty bin/)"
 fi
-# At least one binary must ship for SOME platform.
-[ -n "$(find "$PLUGIN/bin" -name 'tf-*' -type f 2>/dev/null)" ] && ok "bin/ ships at least one target" || bad "bin/ is empty"
 
 printf '\n== E. MCP surface (review W5) ==\n'
 if [ -e "$PLUGIN/.mcp.json" ] || [ -e "$ROOT/.mcp.json" ]; then bad ".mcp.json present — this plugin ships none"; else ok "no .mcp.json (MCP Checks C/K pass vacuously — stated explicitly)"; fi

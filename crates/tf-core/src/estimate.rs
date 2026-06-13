@@ -117,8 +117,10 @@ pub fn estimate(a: Args) -> Out {
         }
     }
 
+    // Display the node's own learned ratio; compute est_total with hierarchical-taxonomy backoff
+    // (a low-sample node leans on its parent/global prior — increasing fidelity as samples accrue).
     let ratio_str = calibrate::ratio_string(&name);
-    let ratio_f: f64 = ratio_str.parse().unwrap_or(1.0);
+    let ratio_f: f64 = calibrate::resolved_ratio(&name);
 
     let est_total = fmt::round_i64(width as f64 * per_unit as f64 * ratio_f);
 

@@ -9,6 +9,15 @@
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/tf-hook.sh preflight-fanout 2>/dev/null || true"
           }
         ]
+      },
+      {
+        "matcher": "Workflow|Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/tf-hook.sh preflight-spend 2>/dev/null || true"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -53,6 +62,10 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-tokens.sh 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/tf-hook.sh spend --capture >/dev/null 2>&1 || true"
           }
         ]
       }
