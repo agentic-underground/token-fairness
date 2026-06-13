@@ -49,7 +49,7 @@ impl DashboardArgs {
 /// Run the dashboard server.
 /// Returns Out with status and exit code.
 pub fn run(args: DashboardArgs) -> Out {
-    println!("Dashboard running on 127.0.0.1:8080");
+    println!("Dashboard running on 0.0.0.0:8080 (all interfaces)");
     if args.prometheus {
         println!("Prometheus metrics enabled at GET /metrics");
     }
