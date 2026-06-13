@@ -32,7 +32,7 @@ impl DashboardArgs {
                              Options:\n  \
                              --prometheus         Enable Prometheus metrics export at GET /metrics\n  \
                              --help               Show this help message\n\n\
-                             The dashboard server binds to 127.0.0.1:8080 by default.\n",
+                             The dashboard server binds to 0.0.0.0:8080 (all interfaces).\n",
                         ),
                     );
                 }
@@ -137,8 +137,8 @@ async fn start_server(enable_prometheus: bool) -> Result<(), String> {
         );
     }
 
-    // Bind and listen
-    let addr = "127.0.0.1:8080"
+    // Bind and listen on all interfaces (0.0.0.0) so remote clients can connect
+    let addr = "0.0.0.0:8080"
         .parse::<std::net::SocketAddr>()
         .map_err(|e| e.to_string())?;
 
