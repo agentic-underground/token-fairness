@@ -68,6 +68,15 @@ pub fn run(args: DashboardArgs) -> Out {
     Out::ok("")
 }
 
+/// Root handler: serve the embedded dashboard HTML.
+///
+/// Returns the page wrapped in [`axum::response::Html`] so the response carries
+/// `Content-Type: text/html` — without the wrapper axum defaults a `&str` body
+/// to `text/plain`, and the browser renders the markup as literal text.
+async fn root_handler() -> axum::response::Html<&'static str> {
+    axum::response::Html(tf_core::dashboard::DASHBOARD_HTML)
+}
+
 /// Start the axum HTTP server on 127.0.0.1:8080.
 async fn start_server(enable_prometheus: bool) -> Result<(), String> {
     use axum::routing::get;
@@ -75,7 +84,7 @@ async fn start_server(enable_prometheus: bool) -> Result<(), String> {
 
     // Build the router with all endpoints
     let mut router = Router::new()
-        .route("/", get(|| async { tf_core::dashboard::DASHBOARD_HTML }))
+        .route("/", get(root_handler))
         .route(
             "/api/session-budget",
             get(|| async {
@@ -120,15 +129,11 @@ async fn start_server(enable_prometheus: bool) -> Result<(), String> {
             get(|| async {
                 match tf_core::dashboard::compute_fold() {
                     Ok(state) => {
-                        let budget_path =
-                            format!("{}/budget.json", tf_core::state::state_dir());
-                        let budget_json =
-                            tf_core::state::read_json(&budget_path)
-                                .unwrap_or(serde_json::json!({}));
-                        let metrics = tf_core::dashboard::PrometheusMetrics::from_fold(
-                            &state,
-                            &budget_json,
-                        );
+                        let budget_path = format!("{}/budget.json", tf_core::state::state_dir());
+                        let budget_json = tf_core::state::read_json(&budget_path)
+                            .unwrap_or(serde_json::json!({}));
+                        let metrics =
+                            tf_core::dashboard::PrometheusMetrics::from_fold(&state, &budget_json);
                         metrics.to_string()
                     }
                     Err(e) => format!("# ERROR: {}\n", e),
@@ -175,5 +180,44 @@ mod tests {
         let argv = vec![];
         let (args, _out) = DashboardArgs::from_argv(&argv);
         assert!(!args.prometheus);
+    }
+
+    /// The root handler must serve the embedded page as `text/html` so browsers
+    /// render it as a webpage (and Chart.js executes) rather than as literal text.
+    #[tokio::test]
+    async fn test_root_handler_content_type_is_html() {
+        use axum::response::IntoResponse;
+
+        let response = root_handler().await.into_response();
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .expect("root response must carry a Content-Type header")
+            .to_str()
+            .expect("Content-Type must be valid UTF-8");
+
+        assert!(
+            content_type.starts_with("text/html"),
+            "expected text/html, got {content_type}"
+        );
+    }
+
+    /// The root handler must serve the actual embedded dashboard markup.
+    #[tokio::test]
+    async fn test_root_handler_serves_dashboard_html() {
+        use axum::body::to_bytes;
+        use axum::response::IntoResponse;
+
+        let response = root_handler().await.into_response();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must be readable");
+        let body = String::from_utf8(bytes.to_vec()).expect("body must be UTF-8");
+
+        assert!(
+            body.contains("<!DOCTYPE html>"),
+            "body must be the HTML page"
+        );
+        assert_eq!(body, tf_core::dashboard::DASHBOARD_HTML);
     }
 }
