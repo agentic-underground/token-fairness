@@ -19,7 +19,7 @@ Each entry is self-contained and can be acted upon by an AI agent or developer w
 ---
 
 ## [1] MCP Server, Telemetry Pipeline & Dashboard
-> STATUS: IN PROGRESS (Phase A COMPLETE; Phase B + C reworked from stub facade to real — all C/H/M defects fixed; remaining gap: WebSocket /ws route not yet wired, AC#6)
+> STATUS: COMPLETE (reworked from stub facade to real, behaviour-tested; all 10 ACs met incl. live WebSocket — 2026-06-14)
 > ADDED: 2026-06-13
 > LAST UPDATED: 2026-06-14
 > PRIORITY: HIGH
@@ -57,10 +57,13 @@ Each entry is self-contained and can be acted upon by an AI agent or developer w
 > - ✅ M1 — MCP tests rewritten to seed real state and assert derived values (192 workspace
 >   tests, green 3× consecutive, no flakiness).
 >
-> **REMAINING (blocks COMPLETE):**
-> - ⬜ AC#6 — the WebSocket `/ws` route is not yet wired into the axum router; live charts
->   refresh by 3s polling, not by push. The telemetry file-watcher + fold exist; the route
->   and broadcast wiring remain.
+> **AC#6 — FIXED 2026-06-14:** the `/ws` WebSocket route is wired into the axum router via a
+> `tokio::sync::broadcast` channel fed by a 250ms truncation-safe poll of the events journal
+> (path from `observe::events_path()`); new JSONL lines reach connected clients well within the
+> 1s SLA (verified live: 101 handshake + exact line received). Best-effort per ADR-003 (lagging
+> clients dropped, no replay). Frontend connects to `ws(s)://<location.host>/ws`, refreshes on
+> push, auto-reconnects, keeps 3s poll as fallback. 4 behaviour tests (SLA, two-client fan-out,
+> malformed-line resilience, partial-line guard). All 10 acceptance criteria now genuinely met.
 
 **Brief Description**
 Add Model Context Protocol (MCP) server surface to the `tf` binary so Claude Code agents can invoke token-scheduler operations as MCP tools (not just CLI). Expose real-time telemetry via WebSocket and dashboard via embedded HTTP server showing live budget gauges, spend by model, guard efficacy (SAVES vs BLOWN), and estimator accuracy. Support optional Prometheus metrics export for Grafana integration.
@@ -98,7 +101,7 @@ Add Model Context Protocol (MCP) server surface to the `tf` binary so Claude Cod
 3. ✅ `tf_budget_read`/`tf_budget_set` work; state persists; real spend folded in
 4. ✅ `tf_report`, `tf_observe`, `tf_spend` return REAL JSON (per-period windows, real ledger)
 5. ✅ `tf dashboard` serves HTML with four rendering Chart.js views (verified live)
-6. ❌ WebSocket at `ws://…/ws` streams new events within 1s — `/ws` route not yet wired (only remaining gap)
+6. ✅ WebSocket at `ws://…/ws` streams new events within 1s — wired via broadcast channel (verified live)
 7. ✅ `GET /metrics` returns valid Prometheus text format (when --prometheus set)
 8. ✅ Binary size with no `dashboard` feature ≤105% — `mcp` no longer leaks rmcp/tokio (H6 fixed)
 9. ✅ `cargo test --workspace --all-features` passes (192 tests, green 3×); MCP tests now assert behaviour
