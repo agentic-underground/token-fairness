@@ -204,6 +204,45 @@ pub fn preflight_spend(payload: &str) -> Out {
     Out::default()
 }
 
+/// `tf session-boundary` — the SessionStart hook body. `session.json` is a single shared file the
+/// Stop hook overwrites, so a NEW session still sees the PRIOR session's cumulative token count
+/// until its own first Stop — which makes `preflight-spend` read a stale total and FALSELY block
+/// ordinary single-agent work (the reported incident). When the payload's `session_id` differs
+/// from the stored one, zero `session.json` (the basis EVERY consumer reads — the legacy cap, the
+/// window-aware blind path, and `plan-close` convergence) and re-anchor the per-window baselines.
+/// No-op when the ids match (a resumed session legitimately keeps its count) or either is absent.
+pub fn session_boundary(payload: &str) -> Out {
+    if payload.trim().is_empty() {
+        return Out::ok("{\"reset\":false,\"reason\":\"no-payload\"}\n");
+    }
+    let v: serde_json::Value = serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
+    let new_sid = v.get("session_id").and_then(|x| x.as_str()).unwrap_or("");
+    let stored_sid = state::read_json(&session_file())
+        .as_ref()
+        .and_then(|s| s.get("session_id"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    // Reset only on a genuine boundary: both ids known and different.
+    if new_sid.is_empty() || stored_sid.is_empty() || new_sid == stored_sid {
+        return Out::ok(format!("{{\"reset\":false,\"session\":\"{}\"}}\n", new_sid));
+    }
+    let doc = serde_json::json!({
+        "session_id": new_sid,
+        "tokens": 0,
+        "usd": 0,
+        "billable_tokens": 0,
+    });
+    if state::write_json(&session_file(), &doc).is_err() {
+        return Out::err(
+            format!("session-boundary: cannot write {}", session_file()),
+            2,
+        );
+    }
+    windows::reanchor_for_new_session();
+    Out::ok(format!("{{\"reset\":true,\"session\":\"{}\"}}\n", new_sid))
+}
+
 /// Minimal flag reader: `--key value` / `--key=value`; presence-only flags via `has`.
 fn flag<'a>(argv: &'a [String], key: &str) -> Option<&'a str> {
     let pfx = format!("--{}", key);
@@ -227,7 +266,13 @@ fn has(argv: &[String], key: &str) -> bool {
 }
 
 /// Per-window display object for `tf budget status`.
-fn win_disp(st: &windows::WinSt, live: Option<f64>, cap: i64, headroom: i64, cur: i64) -> serde_json::Value {
+fn win_disp(
+    st: &windows::WinSt,
+    live: Option<f64>,
+    cap: i64,
+    headroom: i64,
+    cur: i64,
+) -> serde_json::Value {
     let spent_w = windows::spent_in_window(cur, st.baseline_tokens);
     let remaining_w = match live {
         Some(u) if st.quota_tokens > 0 => windows::remaining(st.quota_tokens, u, headroom),
@@ -451,12 +496,18 @@ mod tests {
         )
         .unwrap();
 
-        let s = |args: &[&str]| {
-            dispatch(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
-        };
+        let s = |args: &[&str]| dispatch(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
 
         // set persists all five fields (incl. the --five-hour-cap alias + new flags).
-        let set = s(&["set", "--five-hour-cap", "3000000", "--weekly-cap", "30000000", "--headroom", "20"]);
+        let set = s(&[
+            "set",
+            "--five-hour-cap",
+            "3000000",
+            "--weekly-cap",
+            "30000000",
+            "--headroom",
+            "20",
+        ]);
         assert!(set.stdout.contains("\"session_cap_tokens\":3000000"));
         assert!(set.stdout.contains("\"weekly_cap_tokens\":30000000"));
         assert!(set.stdout.contains("\"headroom_pct\":20"));
@@ -486,7 +537,12 @@ mod tests {
         // unknown subcommand → usage on stderr, exit 2.
         assert_eq!(s(&["wat"]).code, 2);
 
-        for k in ["I2P_COST_STATE_DIR", "I2P_RATELIMIT_SNAPSHOT", "I2P_HONESTY_EVENTS", "I2P_CLOCK"] {
+        for k in [
+            "I2P_COST_STATE_DIR",
+            "I2P_RATELIMIT_SNAPSHOT",
+            "I2P_HONESTY_EVENTS",
+            "I2P_CLOCK",
+        ] {
             std::env::remove_var(k);
         }
         std::fs::remove_dir_all(&dir).ok();
@@ -505,6 +561,85 @@ mod tests {
             "deny should name the window, got: {}",
             out.stdout
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn session_boundary_resets_on_new_session_and_noops_otherwise() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("budget-boundary");
+        std::env::set_var("I2P_COST_STATE_DIR", &dir);
+        let sj = dir.join("session.json");
+        let read_sj = || std::fs::read_to_string(&sj).unwrap_or_default();
+
+        // Prior heavy session left a huge cumulative total under session_id "old".
+        std::fs::write(
+            &sj,
+            r#"{"session_id":"old","tokens":238599810,"billable_tokens":238599810}"#,
+        )
+        .unwrap();
+        // A windows.json with a learned quota + a non-zero baseline from the prior session.
+        std::fs::write(
+            dir.join("windows.json"),
+            r#"{"five_hour":{"baseline_tokens":230000000,"seen_resets_at":1800000000,"quota_tokens":2000000,"samples":5,"last_tokens":238599810,"last_used_pct":40.0},"seven_day":{"baseline_tokens":0,"seen_resets_at":1800500000,"quota_tokens":20000000,"samples":4,"last_tokens":238599810,"last_used_pct":12.0}}"#,
+        )
+        .unwrap();
+
+        // Same session_id ⇒ no reset (a resumed session keeps its count).
+        let same = session_boundary(r#"{"session_id":"old"}"#);
+        assert!(same.stdout.contains("\"reset\":false"));
+        assert!(
+            read_sj().contains("238599810"),
+            "matching sid must not zero session.json"
+        );
+
+        // New session_id ⇒ reset: session.json zeroed with the new sid.
+        let out = session_boundary(r#"{"session_id":"new"}"#);
+        assert!(out.stdout.contains("\"reset\":true"));
+        let after = read_sj();
+        assert!(after.contains("\"session_id\": \"new\""));
+        assert!(after.contains("\"billable_tokens\": 0"));
+        assert!(after.contains("\"tokens\": 0"));
+        // windows.json baselines re-anchored to 0 but the learned quota is PRESERVED.
+        let (five, seven) = windows::load();
+        assert_eq!(five.baseline_tokens, 0);
+        assert_eq!(five.last_tokens, 0);
+        assert_eq!(
+            five.quota_tokens, 2_000_000,
+            "quota survives a session boundary"
+        );
+        assert_eq!(
+            five.seen_resets_at, 1_800_000_000,
+            "active window reset epoch preserved"
+        );
+        assert_eq!(seven.quota_tokens, 20_000_000);
+
+        // After the reset, the prior heavy total no longer blocks a single Agent spawn (blind path:
+        // no fresh snapshot ⇒ spent_in_window(0, 0) = 0).
+        let agent = preflight_spend(r#"{"tool_name":"Agent"}"#);
+        assert!(
+            agent.stdout.is_empty(),
+            "Agent spawn must be unblocked, got: {}",
+            agent.stdout
+        );
+
+        std::env::remove_var("I2P_COST_STATE_DIR");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn session_boundary_noops_without_stored_or_payload() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("budget-boundary-empty");
+        std::env::set_var("I2P_COST_STATE_DIR", &dir);
+        // No session.json yet ⇒ nothing stale to reset.
+        assert!(session_boundary(r#"{"session_id":"new"}"#)
+            .stdout
+            .contains("\"reset\":false"));
+        // Empty payload ⇒ no-op.
+        assert!(session_boundary("").stdout.contains("\"reset\":false"));
+        assert!(!dir.join("session.json").exists());
+        std::env::remove_var("I2P_COST_STATE_DIR");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

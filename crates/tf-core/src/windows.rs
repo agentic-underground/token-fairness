@@ -130,7 +130,13 @@ pub fn remaining(quota: i64, used_pct: f64, headroom: i64) -> i64 {
 }
 
 /// The per-window verdict: allow, or deny with a machine reason.
-fn window_decide(name: &str, v: &WinView, cur_tokens: i64, est: i64, headroom: i64) -> Option<String> {
+fn window_decide(
+    name: &str,
+    v: &WinView,
+    cur_tokens: i64,
+    est: i64,
+    headroom: i64,
+) -> Option<String> {
     let ceiling = (100 - headroom) as f64;
     match v.live {
         Some(used) => {
@@ -209,7 +215,9 @@ fn read_win(root: Option<&Value>, key: &str) -> WinSt {
         quota_tokens: g_i("quota_tokens"),
         samples: g_i("samples"),
         last_tokens: g_i("last_tokens"),
-        last_used_pct: o.map(|o| state::num(o, "last_used_pct", 0.0)).unwrap_or(0.0),
+        last_used_pct: o
+            .map(|o| state::num(o, "last_used_pct", 0.0))
+            .unwrap_or(0.0),
     }
 }
 
@@ -236,6 +244,19 @@ fn win_json(s: &WinSt) -> Value {
 fn save(five: &WinSt, seven: &WinSt) -> std::io::Result<()> {
     let doc = json!({ "five_hour": win_json(five), "seven_day": win_json(seven) });
     state::write_json(&windows_file(), &doc)
+}
+
+/// Session boundary: the cumulative token counter restarted at 0 (a new session), so re-anchor
+/// each window's `baseline_tokens` and `last_tokens` to 0 — spend-in-window then measures from
+/// the new session. The inferred `quota_tokens`/`samples` (account-level) and `seen_resets_at`
+/// (the still-active window) are PRESERVED. No-op-safe: a missing windows.json loads defaults.
+pub fn reanchor_for_new_session() {
+    let (mut five, mut seven) = load();
+    for w in [&mut five, &mut seven] {
+        w.baseline_tokens = 0;
+        w.last_tokens = 0;
+    }
+    let _ = save(&five, &seven);
 }
 
 /// PURE step for one window: fold a fresh `(used_pct, resets_at, cur_tokens)` observation into
@@ -319,7 +340,10 @@ mod tests {
     #[test]
     fn rebaseline_only_advances_on_reset() {
         // First observation: adopt the reset, anchor baseline to current tokens.
-        assert_eq!(rebaseline(0, 1_800_000_000, 500_000, 0), (500_000, 1_800_000_000));
+        assert_eq!(
+            rebaseline(0, 1_800_000_000, 500_000, 0),
+            (500_000, 1_800_000_000)
+        );
         // Same window (reset unchanged): no-op.
         assert_eq!(
             rebaseline(1_800_000_000, 1_800_000_000, 900_000, 500_000),
@@ -370,7 +394,10 @@ mod tests {
         let v = [("5h", view(WinSt::default(), Some(1.0), 2_000_000))];
         assert_eq!(decide(&v, 0, 0, 150_000, 15).1, "no-budget-declared");
         let v = [("5h", view(WinSt::default(), Some(1.0), 2_000_000))];
-        assert_eq!(decide(&v, 0, 605_000, 150_000, 15).1, "exceeds-per-fanout-cap");
+        assert_eq!(
+            decide(&v, 0, 605_000, 150_000, 15).1,
+            "exceeds-per-fanout-cap"
+        );
     }
 
     #[test]
@@ -380,14 +407,20 @@ mod tests {
         let five = view(WinSt::default(), Some(1.0), 2_000_000);
         let seven = view(WinSt::default(), Some(3.0), 20_000_000);
         let v = [("5h", five), ("weekly", seven)];
-        assert_eq!(decide(&v, 90_000_000, 120_000, 150_000, 15), (true, "ok".into()));
+        assert_eq!(
+            decide(&v, 90_000_000, 120_000, 150_000, 15),
+            (true, "ok".into())
+        );
     }
 
     #[test]
     fn fresh_at_ceiling_fails_closed() {
         let five = view(WinSt::default(), Some(92.0), 2_000_000);
         let v = [("5h", five)];
-        assert_eq!(decide(&v, 0, 120_000, 150_000, 15).1, "5h-window-at-ceiling");
+        assert_eq!(
+            decide(&v, 0, 120_000, 150_000, 15).1,
+            "5h-window-at-ceiling"
+        );
     }
 
     #[test]
@@ -399,7 +432,10 @@ mod tests {
             ..Default::default()
         };
         let v = [("5h", view(st, Some(80.0), 2_000_000))];
-        assert_eq!(decide(&v, 0, 120_000, 150_000, 15).1, "exceeds-5h-window-budget");
+        assert_eq!(
+            decide(&v, 0, 120_000, 150_000, 15).1,
+            "exceeds-5h-window-budget"
+        );
         // Same window but quota not yet confident ⇒ below-ceiling allows on headroom alone.
         let cold = WinSt {
             quota_tokens: 2_000_000,
@@ -418,7 +454,10 @@ mod tests {
             ..Default::default()
         };
         let v = [("5h", view(st, None, 2_000_000))];
-        assert_eq!(decide(&v, 1_500_000, 120_000, 150_000, 15), (true, "ok".into()));
+        assert_eq!(
+            decide(&v, 1_500_000, 120_000, 150_000, 15),
+            (true, "ok".into())
+        );
         // Push spent to the cap ⇒ blind cap reached.
         let st = WinSt {
             baseline_tokens: 0,
@@ -436,7 +475,10 @@ mod tests {
         let five = view(WinSt::default(), Some(2.0), 2_000_000);
         let seven = view(WinSt::default(), Some(95.0), 20_000_000);
         let v = [("5h", five), ("weekly", seven)];
-        assert_eq!(decide(&v, 0, 120_000, 150_000, 15).1, "weekly-window-at-ceiling");
+        assert_eq!(
+            decide(&v, 0, 120_000, 150_000, 15).1,
+            "weekly-window-at-ceiling"
+        );
     }
 
     #[test]
