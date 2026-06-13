@@ -31,11 +31,22 @@ The payoff: the 90% case (one developer, one machine, instant local dashboard) i
 - The HTTP server reads the existing JSONL telemetry — no new collection pipeline, no schema change. Charts are projections of files `tf-core` already writes (`report.rs`, `observe.rs`, `spend.rs`, `calibrate.rs`).
 - `GET /metrics` (when `--prometheus` is set) emits Prometheus text format; Grafana integration is documented via `doc/design/adr/docker-compose.grafana.yml`. Satisfies acceptance criterion 7 and the `WHERE --prometheus` EARS requirement.
 
+**Prometheus metric set and types (acceptance criterion 7):**
+- The Prometheus exporter at `GET /metrics` emits the following metrics, with types chosen for semantic correctness (not convenience):
+  * `tf_session_spend_tokens` (**gauge**): cumulative billable tokens for the current session (resets to 0 on the session boundary).
+  * `tf_session_ceiling_percent` (**gauge**): current 5-hour rolling-window utilization (0–100%).
+  * `tf_weekly_ceiling_percent` (**gauge**): current 7-day rolling-window utilization (0–100%).
+  * `tf_guard_saves_total` (**counter**): cumulative SAVE events since process start (monotonic).
+  * `tf_guard_blown_total` (**counter**): cumulative BLOWN events since process start (monotonic).
+  * `tf_guard_procedural_denies_total` (**counter**): cumulative procedural-deny events since process start (monotonic).
+- **Spend and ceiling metrics are GAUGES, not counters.** This is forced by the cumulative-per-session semantics of `crates/tf-core/src/observe.rs` (the `spend` rollup, ~line 201, is deduped to "only the LAST cumulative reading per session" because the Stop hook re-emits cumulative spend every turn). A naive exporter that published cumulative session spend as a Prometheus *counter* would emit a value that **decreases** at the session boundary; Prometheus interprets a decreasing counter as a counter reset, which corrupts `rate()` / `increase()` queries in Grafana. Modeling spend as a gauge is the only correct choice for a value that legitimately falls when the session rolls over.
+- **Counters are reserved for genuinely monotonic event tallies** — SAVES, BLOWN, and procedural denies, which only ever increase within a process lifetime. This split (gauges for resettable cumulative state, counters for monotonic tallies) is what keeps Grafana `rate()` queries valid across session resets and is part of acceptance criterion 7's contract.
+
 **What this makes harder / what we give up:**
 - **We own the web server and the file-watching.** Bringing axum/tokio/notify in-tree means we maintain an HTTP server and cross-platform file-watching (ADR-003) ourselves, rather than delegating to Grafana. Accepted: the maintenance is bounded and the alternative imposes an external service on every user.
 - **Single-machine only.** The embedded dashboard visualizes local files. Multi-machine aggregation is explicitly out of scope for the embedded path; users who need it use the Prometheus → Grafana route.
 - **Best-effort telemetry, no persistence.** The broadcast layer has no message queue; a client that disconnects misses events while away (see ADR-003). Acceptable for a development dashboard.
-- **Two render-time codepaths to keep coherent.** The Prometheus exporter and the REST/WebSocket dashboard read the same telemetry but format it differently. We accept the second codepath because it is small (a text serializer) and strictly opt-in.
+- **Two render-time codepaths to keep coherent.** The Prometheus exporter and the REST/WebSocket dashboard read the same telemetry but format it differently. We accept the second codepath because it is small (a text serializer over the metric set enumerated above) and strictly opt-in. The gauge-vs-counter mapping above is the contract both this exporter and any Grafana dashboard depend on.
 
 ## Alternatives Considered
 - **B) Grafana as primary** — rejected. Professional and multi-machine-capable, but requires an external service (none installed locally) and a configuration burden that is pure overhead for a single-developer tool. It inverts the project's "just a binary" ethos. Demoting Grafana to an opt-in integration captures its value without its cost.
@@ -44,6 +55,7 @@ The payoff: the 90% case (one developer, one machine, instant local dashboard) i
 
 ## References
 - `doc/ROADMAP.md` § [1] — EARS: HTTP dashboard on port 8080; `SHALL NOT increase hook binary size`; `WHERE --prometheus`; acceptance criteria 5–8, 10
+- `crates/tf-core/src/observe.rs` (~line 201) — the cumulative-per-session spend dedup that forces spend/ceiling metrics to be gauges, not counters
 - ADR-001 (MCP Transport) — `tf dashboard` is a separate process/surface from `tf mcp`
 - ADR-003 (Telemetry Pipeline) — the file-watch + WebSocket layer feeding this server
 - ADR-004 (Chart Rendering) — how this server's charts are drawn
