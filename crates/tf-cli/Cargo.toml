@@ -8,6 +8,10 @@ license.workspace = true
 name = "tf"
 path = "src/main.rs"
 
+[features]
+# MCP server surface (feature-gated to protect hook binary size)
+mcp = ["rmcp", "tf-core/mcp"]
+
 [dependencies]
 tf-core = { path = "../tf-core" }
 # libc only for the single-instance flock in `run-offpeak` (the OS-cron entry point);

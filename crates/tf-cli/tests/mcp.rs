@@ -135,7 +135,6 @@ fn test_verdict_adapter_ceiling_always_present() {
 // ============================================================================
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_gate_tool_allow_verdict() {
     // Happy path: ceiling has headroom, gate returns "allow"
     // When: agent calls tf_gate with used_pct=80, headroom=15
@@ -168,7 +167,6 @@ fn test_tf_gate_tool_allow_verdict() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_gate_tool_deny_verdict() {
     // Unhappy path: spend + headroom exceeds 100%, gate returns "deny"
     // When: agent calls tf_gate with used_pct=90, headroom=15
@@ -197,7 +195,6 @@ fn test_tf_gate_tool_deny_verdict() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_budget_read_returns_state() {
     // Happy path: tf_budget_read returns current budget state
     // Then: response contains session_cap, per_fanout_cap, current_spend, fanout_spend
@@ -219,7 +216,6 @@ fn test_tf_budget_read_returns_state() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_budget_set_updates_state() {
     // Happy path: tf_budget_set updates session_cap and persists
     // When: agent calls tf_budget_set with key=session_cap, value=60000
@@ -247,7 +243,6 @@ fn test_tf_budget_set_updates_state() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_report_returns_spend_window() {
     // Happy path: tf_report returns window spend and gate denials
     // When: agent calls tf_report with window=day
@@ -269,7 +264,6 @@ fn test_tf_report_returns_spend_window() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_observe_returns_deduplicated_spans() {
     // Happy path: tf_observe returns array of deduplicated span observations
     // Then: each element has span_id, cost_tokens, model, role
@@ -297,7 +291,6 @@ fn test_tf_observe_returns_deduplicated_spans() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_spend_records_event() {
     // Happy path: tf_spend records a new spend event
     // When: agent calls tf_spend with span_id, cost, model, role
@@ -322,7 +315,6 @@ fn test_tf_spend_records_event() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_signal_sets_state() {
     // Happy path: tf_signal sets a signal state
     // When: agent calls tf_signal with name=gate, status=OK
@@ -341,7 +333,6 @@ fn test_tf_signal_sets_state() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_plan_open_creates_plan() {
     // Happy path: tf_plan_open creates a new budget plan
     // When: agent calls tf_plan_open with title and budget_tokens
@@ -362,7 +353,6 @@ fn test_tf_plan_open_creates_plan() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_plan_close_closes_plan() {
     // Happy path: tf_plan_close closes an open plan
     // First open a plan, then close it
@@ -397,7 +387,6 @@ fn test_tf_plan_close_closes_plan() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_tf_schedule_toggle() {
     // Happy path: tf_schedule_toggle enables/disables the schedule gate
     // When: agent calls tf_schedule_toggle with enabled=true
@@ -420,7 +409,6 @@ fn test_tf_schedule_toggle() {
 // ============================================================================
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_resource_tf_status() {
     // Happy path: tf://status resource returns current state snapshot
     // Then: response has session_budget, signals, timestamp fields
@@ -440,7 +428,6 @@ fn test_resource_tf_status() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_resource_tf_calibration() {
     // Happy path: tf://calibration resource returns window definitions
     // Then: response has rolling_windows, current_window, next_boundary
@@ -459,7 +446,6 @@ fn test_resource_tf_calibration() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_resource_tf_events() {
     // Happy path: tf://events resource returns recent event summaries
     // Then: response is an array of at most 100 events
@@ -481,7 +467,6 @@ fn test_resource_tf_events() {
 // ============================================================================
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_unknown_method_returns_error() {
     // Abuse path: unknown method name
     // When: agent sends JSON-RPC request with method="tf_unknown_tool"
@@ -524,7 +509,6 @@ fn test_unknown_method_returns_error() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_malformed_json_rpc_returns_error() {
     // Abuse path: missing required JSON-RPC fields
     // When: agent sends {"jsonrpc":"2.0","method":"tf_gate"} (missing id, params)
@@ -557,7 +541,6 @@ fn test_malformed_json_rpc_returns_error() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_invalid_json_returns_parse_error() {
     // Abuse path: completely invalid JSON
     // When: agent sends gibberish
@@ -592,7 +575,6 @@ fn test_invalid_json_returns_parse_error() {
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_invalid_budget_set_key() {
     // Unhappy path: tf_budget_set with invalid key
     // When: agent calls with key="invalid_key"
@@ -604,12 +586,11 @@ fn test_invalid_budget_set_key() {
         "value": 1000
     });
 
-    let (_response, result) = send_tool_call(&mut server, "tf_budget_set", Some(params));
-    assert!(result.is_none(), "should return an error");
+    let (response, _) = send_tool_call(&mut server, "tf_budget_set", Some(params));
+    assert!(response.get("error").is_some(), "should return an error");
 }
 
 #[test]
-#[ignore] // RED: implementation not ready
 fn test_stdio_eof_graceful_shutdown() {
     // Edge case: parent closes stdin, server should terminate cleanly
     // When: stdin is closed

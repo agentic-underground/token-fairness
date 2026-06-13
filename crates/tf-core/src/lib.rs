@@ -13,6 +13,8 @@ pub mod ensemble;
 pub mod estimate;
 pub mod fmt;
 pub mod ledger;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod observe;
 pub mod offpeak;
 pub mod registry;

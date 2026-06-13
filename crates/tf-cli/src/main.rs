@@ -7,6 +7,9 @@
 mod offpeak_run;
 mod oscron;
 
+#[cfg(feature = "mcp")]
+mod mcp_server;
+
 use std::collections::HashMap;
 use std::io::{IsTerminal, Read};
 use std::process::exit;
@@ -165,6 +168,8 @@ fn main() {
         "session-boundary" => budget::session_boundary(&read_stdin()),
         "spend" => spend::dispatch(rest),
         "observe" => observe::dispatch(rest),
+        #[cfg(feature = "mcp")]
+        "mcp" => mcp_server::run(),
         "" => Out::err("usage: tf <command> [args]", 2),
         "--help" | "-h" | "help" => Out::ok(
             "usage: tf <command> [args]\n\n\
@@ -173,7 +178,8 @@ fn main() {
              Fanout:    preflight  preflight-spend  preflight-fanout  estimate\n\
              Estimator: calibrate  estimator  route\n\
              Offpeak:   offpeak-window  offpeak-budget  run-offpeak\n\
-             Durable:   ledger  registry  oscron\n\n\
+             Durable:   ledger  registry  oscron\n\
+             MCP:       mcp\n\n\
              Run `tf <command>` with no args for per-command usage.\n"
                 .to_string(),
         ),
