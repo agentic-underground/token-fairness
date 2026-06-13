@@ -73,6 +73,18 @@ pub fn calibration_file() -> String {
     format!("{}/calibration.json", state_dir())
 }
 
+/// The estimator's own accuracy ledger (append-only JSONL) — a sibling of the calibration file,
+/// so it honours `I2P_CALIBRATION_FILE`. Backs the KAIZEN accuracy-over-time graph.
+pub fn accuracy_ledger() -> String {
+    let cal = calibration_file();
+    match Path::new(&cal).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => {
+            format!("{}/estimator-accuracy.jsonl", dir.to_string_lossy())
+        }
+        _ => "estimator-accuracy.jsonl".to_string(),
+    }
+}
+
 pub fn read_json(path: &str) -> Option<Value> {
     let s = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&s).ok()
@@ -88,6 +100,27 @@ pub fn write_atomic(path: &str, content: &str) -> std::io::Result<()> {
     let tmp = format!("{}.tmp.{}", path, std::process::id());
     std::fs::write(&tmp, content)?;
     std::fs::rename(&tmp, path)
+}
+
+/// Append one newline-terminated line, creating parents. Best-effort O_APPEND (atomic for small
+/// writes on local fs) — the append-only ledger pattern shared by estimator-accuracy.jsonl and
+/// the honesty event log. A lost line is acceptable; a corrupt file is not.
+pub fn append_line(path: &str, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = Path::new(path).parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir)?;
+        }
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    f.write_all(line.as_bytes())?;
+    if !line.ends_with('\n') {
+        f.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 /// `obj.key` as f64 with a default (mirrors jq `(.key // default)` for numbers).

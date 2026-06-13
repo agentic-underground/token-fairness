@@ -2,3 +2,6 @@
 *.tmp.*
 # Project-local runtime state (job registry + ledgers), not source — like the bash's .i2p/.
 /.i2p/
+# Compiled tf binaries are NOT committed — they ship as GitHub Release assets and are
+# lazy-downloaded by hooks/tf-hook.sh. Keep bin/README.md (the only tracked file in bin/).
+/plugins/scheduler/bin/tf-*

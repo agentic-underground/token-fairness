@@ -68,10 +68,88 @@ pub fn dispatch(payload: &str) -> Out {
         .entry(evt)
         .or_insert_with(|| json!({ "fires": 0, "with_rate_limits": 0 }));
     entry["present"] = json!(true);
+
+    // BLOWN detection (P-I, HON-1): a window AT/OVER 100% is a genuine lockout — the guard FAILED
+    // to prevent it. Honesty demands we record it as loudly as a SAVE. Dedup by the window's
+    // resets_at so one lockout EPISODE logs exactly one BLOWN, not one per hook fire.
+    let blown = ["five_hour", "seven_day"].iter().find_map(|w| {
+        match v
+            .pointer(&format!("/rate_limits/{}/used_percentage", w))
+            .and_then(|x| x.as_f64())
+        {
+            Some(p) if p >= 100.0 => {
+                let reset = v
+                    .pointer(&format!("/rate_limits/{}/resets_at", w))
+                    .map(|x| x.to_string())
+                    .unwrap_or_default();
+                Some((*w, reset))
+            }
+            _ => None,
+        }
+    });
+    if let Some((w, reset)) = blown {
+        let marker = format!("{}@{}", w, reset);
+        if findings.get("last_blown").and_then(|x| x.as_str()) != Some(marker.as_str()) {
+            crate::observe::log_blown(&format!("rate-limit {} window exhausted (100%)", w));
+            findings["last_blown"] = json!(marker);
+        }
+    }
+
     let _ = state::write_atomic(
         &findings_path,
         &(serde_json::to_string(&findings).unwrap_or_default() + "\n"),
     );
 
     Out::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lockout_logs_one_blown_then_dedups_on_same_reset() {
+        let _g = crate::testutil::ENV_LOCK.lock().unwrap();
+        let dir = crate::testutil::temp_dir("snapshot");
+        let evfile = dir.join("honesty-events.jsonl");
+        std::env::set_var("I2P_COST_STATE_DIR", &dir); // snapshot + findings land here
+        std::env::set_var("I2P_HONESTY_EVENTS", &evfile);
+
+        // five_hour at 100% ⇒ a genuine lockout ⇒ one BLOWN.
+        let payload = r#"{"hook_event_name":"PostToolUse","rate_limits":{"five_hour":{"used_percentage":100,"resets_at":1800000000}}}"#;
+        dispatch(payload);
+        let n1 = std::fs::read_to_string(&evfile).unwrap().lines().count();
+        assert_eq!(n1, 1, "first lockout logs exactly one blown");
+
+        // Same resets_at on the next hook fire ⇒ deduped, no second blown.
+        dispatch(payload);
+        let n2 = std::fs::read_to_string(&evfile).unwrap().lines().count();
+        assert_eq!(n2, 1, "same episode does not double-log");
+
+        // A NEW window (different resets_at) ⇒ a fresh blown.
+        let payload2 = r#"{"hook_event_name":"PostToolUse","rate_limits":{"five_hour":{"used_percentage":100,"resets_at":1800099999}}}"#;
+        dispatch(payload2);
+        let n3 = std::fs::read_to_string(&evfile).unwrap().lines().count();
+        assert_eq!(n3, 2, "a new lockout episode logs again");
+
+        std::env::remove_var("I2P_COST_STATE_DIR");
+        std::env::remove_var("I2P_HONESTY_EVENTS");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn below_ceiling_logs_no_blown() {
+        let _g = crate::testutil::ENV_LOCK.lock().unwrap();
+        let dir = crate::testutil::temp_dir("snapshot-ok");
+        let evfile = dir.join("honesty-events.jsonl");
+        std::env::set_var("I2P_COST_STATE_DIR", &dir);
+        std::env::set_var("I2P_HONESTY_EVENTS", &evfile);
+        dispatch(
+            r#"{"rate_limits":{"five_hour":{"used_percentage":42.0,"resets_at":1800000000}}}"#,
+        );
+        std::env::remove_var("I2P_COST_STATE_DIR");
+        std::env::remove_var("I2P_HONESTY_EVENTS");
+        assert!(!evfile.exists(), "a healthy window logs no blown");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
