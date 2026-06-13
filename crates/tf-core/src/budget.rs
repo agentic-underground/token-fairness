@@ -30,11 +30,24 @@ fn session_file() -> String {
     format!("{}/session.json", state::state_dir())
 }
 
-/// Cumulative session tokens written by the Stop hook (`session-tokens.sh`); 0 if absent.
+/// Cumulative session tokens for the CAP, written by the Stop hook (`session-tokens.sh`); 0 if
+/// absent. Prefers `billable_tokens` (in+out+cache_creation) when present and falls back to the
+/// full `tokens`. Cache-read tokens are ~$0.10/M but dominate the raw count on a long session
+/// (e.g. 71.6M tokens for $61) — counting them made the 2M cap trip at trivial real cost (Issue #2
+/// follow-up). The cap therefore tracks the EXPENSIVE tokens; `tokens`/`usd` stay full for
+/// spend-audit and convergence.
 fn session_tokens() -> i64 {
-    state::read_json(&session_file())
-        .map(|v| state::int(&v, "tokens", 0))
-        .unwrap_or(0)
+    match state::read_json(&session_file()) {
+        Some(v) => {
+            let bill = state::int(&v, "billable_tokens", -1);
+            if bill >= 0 {
+                bill
+            } else {
+                state::int(&v, "tokens", 0)
+            }
+        }
+        None => 0,
+    }
 }
 
 /// (session_cap, per_fanout_cap, baseline_tokens) from budget.json, else the defaults.

@@ -304,3 +304,31 @@ two forms above.
 - [ ] Commits `feat(scheduler): …`; version bump per the repo's convention.
 - [ ] `knowledge/token-aware-scheduling.md` §"Needs empirical verification" updated with this event's
       findings, and `skills/token-scheduler/SKILL.md` carries the procedure fix.
+
+---
+
+## Implemented (resolution, 2026-06-13)
+
+Triaged against the **merged CORE-A/B/C** work (which postdates this brief). What shipped on this PR:
+
+- **Fix 3 — DONE.** `tf plan-close --actual <n>`; the documented path feeds it from **`tf spend`**
+  (CORE-C, subagent-aware) rather than an orchestrator self-report.
+- **Fix 2a — DONE (slim).** `tf ledger spend <dir> <job> <tokens>` → HALT (exit 10) at `budget_total`.
+  Scoped to the off-peak/scheduled-job ledger.
+- **Fix 2b — DROPPED.** `gate-budget` reading `budget.*` from the Workflow payload is **redundant**
+  with CORE-B `budget.rs::preflight_spend` (already wired into `PreToolUse(Workflow|Agent|Task)`,
+  signal-independent, denies an unarmed Workflow = INV-1) **and** leans on `budget.*`, which was
+  **null** in this very incident. Not implemented.
+- **Fix 1a — DONE.** `tf doctor` — readiness checklist redefined around the now-existing
+  `tf budget`/arm (session writer? budget headroom? snapshot fresh? armed?), exit≠0 when not ready.
+- **Fix 1b — DONE.** `tf gate --on-no-signal=halt|ask|defer` (default `ask`, unchanged; DEFER uses
+  the repo's exit-4 convention, not the spec's 30).
+- **Procedure — DONE.** `SKILL.md` + `knowledge/token-aware-scheduling.md` updated (the four open
+  questions are now answered empirically; the cap must be `tf budget arm`/ledger, not a UI number).
+
+### New finding (not in the original brief)
+The session cap counted cumulative `session.json.tokens` **including cache-reads** — a live session
+showed **71.6M tokens for $61.81**, tripping the 2M cap so the gate hard-denied *all* fan-out at
+trivial real cost. Fixed: `session-tokens.sh` now also writes **`billable_tokens`** (in+out+cache_write,
+cache-reads excluded) and `budget.rs` reads it for the cap. `.tokens`/`.usd` stay full for the spend
+audit and convergence.

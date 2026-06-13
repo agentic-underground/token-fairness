@@ -113,6 +113,40 @@ pub fn dispatch(argv: &[String]) -> Out {
             Out::default()
         }
 
+        // `spend <dir> <job> <tokens>` — local token accounting against `budget_total` (Issue #2,
+        // Fix 2a). Signal-INDEPENDENT: pure arithmetic on the ledger, so it bites in exactly the
+        // blind condition that defeated L1 (no `.rate_limits`). Distinct from the CORE-A session cap
+        // (`tf budget`): that guards a whole session; this guards ONE scheduled/off-peak job's budget.
+        // Exit 10 (HALT) once cumulative spend reaches `budget_total` so the wave loop checkpoints.
+        "spend" => {
+            let add = state::digits_or(arg(3), 0);
+            let mut root = match load(&lf) {
+                Ok(v) => v,
+                Err(o) => return o,
+            };
+            let spent = root
+                .get("spent_tokens")
+                .and_then(|x| x.as_i64())
+                .unwrap_or(0)
+                .saturating_add(add);
+            root["spent_tokens"] = json!(spent);
+            let budget = root
+                .get("budget_total")
+                .and_then(|x| x.as_i64())
+                .unwrap_or(0);
+            let _ = state::write_json(&lf, &root);
+            let halt = budget > 0 && spent >= budget;
+            Out::line(
+                format!(
+                    "{{\"spent\":{},\"budget_total\":{},\"verdict\":\"{}\"}}\n",
+                    spent,
+                    budget,
+                    if halt { "HALT" } else { "CONTINUE" }
+                ),
+                if halt { 10 } else { 0 },
+            )
+        }
+
         "remaining" => {
             let root = match load(&lf) {
                 Ok(v) => v,
