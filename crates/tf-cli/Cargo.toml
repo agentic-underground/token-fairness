@@ -9,8 +9,9 @@ name = "tf"
 path = "src/main.rs"
 
 [features]
-# MCP server surface (feature-gated to protect hook binary size)
-mcp = ["rmcp", "tf-core/mcp"]
+# MCP server surface (feature-gated to protect hook binary size). The stdio JSON-RPC loop is
+# hand-rolled on std::io — no rmcp/tokio — so the binary stays small (see mcp_server.rs / H6).
+mcp = ["tf-core/mcp"]
 # Dashboard and telemetry pipeline (feature-gated to protect hook binary size)
 dashboard = ["axum", "tokio", "notify", "tf-core/dashboard"]
 
@@ -19,8 +20,6 @@ tf-core = { path = "../tf-core" }
 # libc only for the single-instance flock in `run-offpeak` (the OS-cron entry point);
 # a single syscall, negligible binary-size cost.
 libc = "0.2"
-# MCP server support (optional, feature-gated)
-rmcp = { version = "0.2", optional = true }
 # Dashboard and telemetry support (optional, feature-gated)
 axum = { version = "0.7", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }

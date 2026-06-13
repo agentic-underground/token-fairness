@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Fairness Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
+        h1 { color: #333; }
+        .container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+        .chart { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        canvas { max-width: 100%; }
+    </style>
+</head>
+<body>
+    <h1>Token Fairness Dashboard</h1>
+    <div class="container">
+        <div class="chart"><canvas id="spendGauge"></canvas></div>
+        <div class="chart"><canvas id="spendPie"></canvas></div>
+        <div class="chart"><canvas id="efficacyTrend"></canvas></div>
+    </div>
+    <script>
+        // Placeholder: JavaScript fold function will be embedded here
+        // For now, fetch from REST endpoints and update charts
+        async function updateCharts() {
+            try {
+                const budget = await fetch('/api/session-budget').then(r => r.json());
+                const spend = await fetch('/api/spend-by-model').then(r => r.json());
+                const efficacy = await fetch('/api/guard-efficacy').then(r => r.json());
+
+                // Render charts with data
+                console.log('Dashboard loaded:', { budget, spend, efficacy });
+            } catch (e) {
+                console.error('Failed to load dashboard:', e);
+            }
+        }
+        updateCharts();
+
+        // WebSocket connection for real-time updates (future)
+        // const ws = new WebSocket('ws://localhost:8080/ws');
+    </script>
+</body>
+</html>

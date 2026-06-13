@@ -1,22 +1,23 @@
 //! MCP server — stdio JSON-RPC 2.0 transport for token-fairness tools and resources.
 //!
-//! This module runs the MCP server using the `rmcp` (Rust Model Context Protocol) SDK.
-//! The server reads JSON-RPC 2.0 requests from stdin and writes responses to stdout,
-//! implementing the tool and resource handlers defined in `tf_core::mcp`.
+//! A hand-rolled synchronous stdio loop (no tokio, no rmcp) so the `mcp` feature stays small.
+//! It speaks enough real MCP for a client (Claude Code) to handshake and enumerate the surface:
+//! `initialize`, `tools/list`, `resources/list`, `tools/call`, and `resources/read` — plus the
+//! legacy `tf_*` direct-method form. Tool/resource logic lives in `tf_core::mcp`.
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use tf_core::mcp;
 use tf_core::Out;
 
+/// The MCP protocol revision this server advertises in the `initialize` response.
+const PROTOCOL_VERSION: &str = "2024-11-05";
+
 /// Runs the MCP server, reading JSON-RPC 2.0 requests from stdin and writing responses to stdout.
 ///
-/// This is the entry point for `tf mcp`. The server registers all MCP tools and resources,
-/// then enters a request/response loop until stdin is closed (EOF).
+/// This is the entry point for `tf mcp`. The server handles the MCP handshake
+/// (`initialize`/`tools/list`/`resources/list`) and tool/resource calls, looping until EOF.
 pub fn run() -> Out {
-    // For now, use a simple synchronous stdio loop instead of the full rmcp::Server
-    // infrastructure (which requires tokio). This allows the tests to pass.
-
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let reader = BufReader::new(stdin.lock());
@@ -98,14 +99,65 @@ fn handle_json_rpc_request(request_str: &str) -> String {
     };
 
     // Dispatch the method
-    let response = if method.starts_with("tf_") {
-        // Tool method — check if it exists first
-        match mcp::dispatch_tool(method, &params) {
-            Ok(result) => json!({
+    let ok = |result: Value| {
+        json!({
+            "jsonrpc": "2.0",
+            "result": result,
+            "id": id
+        })
+    };
+
+    let response = if method == "initialize" {
+        // The MCP handshake: advertise protocol version, capabilities, and server identity so a
+        // real client can negotiate and then enumerate tools/resources.
+        ok(json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {
+                "tools": {},
+                "resources": {}
+            },
+            "serverInfo": {
+                "name": "token-fairness",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        }))
+    } else if method == "tools/list" {
+        ok(mcp::tools_list())
+    } else if method == "resources/list" {
+        ok(mcp::resources_list())
+    } else if method == "tools/call" {
+        // Standard MCP tool invocation: { "name": "tf_gate", "arguments": { ... } }.
+        let name = params.get("name").and_then(|v| v.as_str());
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()));
+        match name {
+            Some(n) => match mcp::dispatch_tool(n, &args) {
+                Ok(result) => ok(result),
+                Err(err) => {
+                    let code = if err.contains("unknown method") {
+                        -32601
+                    } else {
+                        -32000
+                    };
+                    json!({
+                        "jsonrpc": "2.0",
+                        "error": { "code": code, "message": err },
+                        "id": id
+                    })
+                }
+            },
+            None => json!({
                 "jsonrpc": "2.0",
-                "result": result,
+                "error": { "code": -32602, "message": "Invalid params: tools/call requires 'name'" },
                 "id": id
             }),
+        }
+    } else if method.starts_with("tf_") {
+        // Legacy direct-method form (kept for the existing client/test surface).
+        match mcp::dispatch_tool(method, &params) {
+            Ok(result) => ok(result),
             Err(err) => {
                 // If the error message indicates an unknown method, use -32601; otherwise use -32000
                 let code = if err.contains("unknown method") {

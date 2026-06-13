@@ -5,11 +5,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tempfile::TempDir;
 
 // Test utilities
 mod testutil {
@@ -163,7 +158,7 @@ fn test_watcher_continues_after_truncation() {
         drop(f);
 
         // Simulate reading up to offset
-        let initial_len = fs::metadata(&events_file).unwrap().len();
+        let _initial_len = fs::metadata(&events_file).unwrap().len();
 
         // Act: Truncate and write new content
         let mut f = fs::File::create(&events_file).unwrap();

@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_fold_dedupes_spend_to_latest() {
-        let lines = vec![
+        let lines = [
             // Session A: cumulative spend 100, then 200 (only last counts)
             r#"{"ts":1000,"session":"A","kind":"spend","by_model":[{"model":"opus","tokens":100,"cost_usd":1.0}],"total_tokens":100,"total_cost_usd":1.0}"#,
             r#"{"ts":2000,"session":"A","kind":"spend","by_model":[{"model":"opus","tokens":200,"cost_usd":2.0}],"total_tokens":200,"total_cost_usd":2.0}"#,
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn test_fold_tallies_gate_verdicts() {
         let day = 20_616 * 86_400;
-        let lines = vec![
+        let lines = [
             format!(
                 r#"{{"ts":{},"kind":"gate","class":"save","reason":"exceeds-per-fanout-cap","est":120000}}"#,
                 day
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn test_fold_tallies_blown_events() {
         let day = 20_616 * 86_400;
-        let lines = vec![
+        let lines = [
             format!(
                 r#"{{"ts":{},"kind":"blown","reason":"5h-window exhausted"}}"#,
                 day

@@ -64,8 +64,8 @@ pub fn endpoint_session_budget() -> Result<serde_json::Value, DashboardError> {
     let budget_path = format!("{}/budget.json", state::state_dir());
     let budget_json = state::read_json(&budget_path).unwrap_or(json!({}));
 
-    let session_cap = state::int(&budget_json, "session_cap", 2_000_000) as u64;
-    let per_fanout_cap = state::int(&budget_json, "per_fanout_cap", 100_000) as u64;
+    let session_cap = state::int(&budget_json, "session_cap_tokens", 2_000_000) as u64;
+    let per_fanout_cap = state::int(&budget_json, "per_fanout_cap_tokens", 100_000) as u64;
 
     let ceiling_pct = if session_cap > 0 {
         (state.session_spend as f64 / session_cap as f64) * 100.0
@@ -77,7 +77,7 @@ pub fn endpoint_session_budget() -> Result<serde_json::Value, DashboardError> {
         "session_cap": session_cap,
         "per_fanout_cap": per_fanout_cap,
         "current_spend": state.session_spend,
-        "ceiling_pct": ceiling_pct.min(100.0).max(0.0),
+        "ceiling_pct": ceiling_pct.clamp(0.0, 100.0),
     }))
 }
 
@@ -148,7 +148,7 @@ pub struct PrometheusMetrics {
 impl PrometheusMetrics {
     /// Generate from folded event state.
     pub fn from_fold(state: &FoldState, budget_json: &serde_json::Value) -> Self {
-        let session_cap = state::int(budget_json, "session_cap", 2_000_000) as u64;
+        let session_cap = state::int(budget_json, "session_cap_tokens", 2_000_000) as u64;
         let session_ceiling_percent = if session_cap > 0 {
             (state.session_spend as f64 / session_cap as f64) * 100.0
         } else {
@@ -232,56 +232,14 @@ impl std::fmt::Display for PrometheusMetrics {
 // Embedded HTML Asset
 // ============================================================================
 
-/// The embedded Chart.js dashboard HTML.
-/// This will be replaced with the actual HTML from assets/dashboard.html at compile time.
-pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Token Fairness Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
-        h1 { color: #333; }
-        .container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-        .chart { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        canvas { max-width: 100%; }
-    </style>
-</head>
-<body>
-    <h1>Token Fairness Dashboard</h1>
-    <div class="container">
-        <div class="chart"><canvas id="spendGauge"></canvas></div>
-        <div class="chart"><canvas id="spendPie"></canvas></div>
-        <div class="chart"><canvas id="efficacyTrend"></canvas></div>
-    </div>
-    <script>
-        // Placeholder: JavaScript fold function will be embedded here
-        // For now, fetch from REST endpoints and update charts
-        async function updateCharts() {
-            try {
-                const budget = await fetch('/api/session-budget').then(r => r.json());
-                const spend = await fetch('/api/spend-by-model').then(r => r.json());
-                const efficacy = await fetch('/api/guard-efficacy').then(r => r.json());
-
-                // Render charts with data
-                console.log('Dashboard loaded:', { budget, spend, efficacy });
-            } catch (e) {
-                console.error('Failed to load dashboard:', e);
-            }
-        }
-        updateCharts();
-
-        // WebSocket connection for real-time updates (future)
-        // const ws = new WebSocket('ws://localhost:8080/ws');
-    </script>
-</body>
-</html>"#;
+/// The embedded Chart.js dashboard HTML, relocated to `assets/dashboard.html` so the frontend
+/// agent can own that file without colliding with Rust edits here. Embedded at compile time.
+pub const DASHBOARD_HTML: &str = include_str!("../../../assets/dashboard.html");
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{temp_dir, ENV_LOCK};
 
     #[test]
     fn test_endpoint_session_budget_returns_json() {
@@ -291,6 +249,53 @@ mod tests {
         assert!(json.get("session_cap").is_some());
         assert!(json.get("current_spend").is_some());
         assert!(json.get("ceiling_pct").is_some());
+    }
+
+    /// H7 behaviour: the endpoint must read the REAL on-disk budget keys
+    /// (`session_cap_tokens` / `per_fanout_cap_tokens`, written by `budget set`). Seeding the
+    /// real keys and asserting they surface fails against the old `session_cap` reader (which
+    /// would silently fall back to the 2_000_000 default), and a seeded spend event drives a
+    /// correct ceiling %.
+    #[test]
+    fn test_endpoint_session_budget_reads_real_keys_and_ceiling() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("dash-budget");
+        let events = dir.join("honesty-events.jsonl");
+        // One spend event: latest session reading of 250_000 tokens.
+        std::fs::write(
+            &events,
+            r#"{"ts":1000,"session":"S","kind":"spend","by_model":[{"model":"opus","tokens":250000,"cost_usd":1.0}],"total_tokens":250000,"total_cost_usd":1.0}"#,
+        )
+        .unwrap();
+        // budget.json written with the REAL keys (as `tf budget set` does).
+        std::fs::write(
+            dir.join("budget.json"),
+            r#"{"session_cap_tokens":1000000,"per_fanout_cap_tokens":75000}"#,
+        )
+        .unwrap();
+
+        std::env::set_var("I2P_COST_STATE_DIR", &dir);
+        std::env::set_var("I2P_HONESTY_EVENTS", &events);
+        let json = endpoint_session_budget().expect("endpoint ok");
+        std::env::remove_var("I2P_COST_STATE_DIR");
+        std::env::remove_var("I2P_HONESTY_EVENTS");
+
+        assert_eq!(
+            json.get("session_cap").unwrap().as_u64().unwrap(),
+            1_000_000
+        );
+        assert_eq!(
+            json.get("per_fanout_cap").unwrap().as_u64().unwrap(),
+            75_000
+        );
+        assert_eq!(
+            json.get("current_spend").unwrap().as_u64().unwrap(),
+            250_000
+        );
+        // 250_000 / 1_000_000 = 25%
+        assert_eq!(json.get("ceiling_pct").unwrap().as_f64().unwrap(), 25.0);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -320,7 +325,7 @@ mod tests {
     #[test]
     fn test_prometheus_metrics_format() {
         let state = FoldState::default();
-        let budget_json = json!({ "session_cap": 2_000_000 });
+        let budget_json = json!({ "session_cap_tokens": 2_000_000 });
         let metrics = PrometheusMetrics::from_fold(&state, &budget_json);
         let output = metrics.to_string();
 
@@ -336,7 +341,7 @@ mod tests {
     #[test]
     fn test_prometheus_gauge_vs_counter_types() {
         let state = FoldState::default();
-        let budget_json = json!({ "session_cap": 2_000_000 });
+        let budget_json = json!({ "session_cap_tokens": 2_000_000 });
         let metrics = PrometheusMetrics::from_fold(&state, &budget_json);
         let output = metrics.to_string();
 
