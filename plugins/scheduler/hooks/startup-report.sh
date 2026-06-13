@@ -22,6 +22,21 @@ cwd=""
 [ -n "$payload" ] && cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
 [ -n "$cwd" ] || cwd="$(pwd 2>/dev/null || echo .)"
 
+# Auto-reset the spend baseline when session.json belongs to a prior session.
+# session.json is overwritten at Stop — so when a new session starts, it may still hold
+# the previous session's cumulative token count. If the stored session_id differs from the
+# current one, the preflight-spend gate reads the prior session's large total as the CURRENT
+# spend and blocks ordinary single-agent work. Reset the baseline to zero out the stale count.
+# Silent on any error; never blocks the rest of startup.
+if [ -n "$payload" ]; then
+  current_sid="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
+  state_dir="${I2P_COST_STATE_DIR:-${HOME}/.claude/state/i2p-cost}"
+  stored_sid="$(jq -r '.session_id // empty' "${state_dir}/session.json" 2>/dev/null)"
+  if [ -n "$current_sid" ] && [ -n "$stored_sid" ] && [ "$current_sid" != "$stored_sid" ]; then
+    "$TF" budget set --reset >/dev/null 2>&1 || true
+  fi
+fi
+
 # Fresh session ⇒ no in-session cron is live yet. Reset ephemeral arming so the report is truthful.
 "$TF" registry reset-armed "$cwd" >/dev/null 2>&1 || true
 
