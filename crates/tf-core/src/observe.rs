@@ -729,6 +729,42 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_period_flag_rejects_bad_value() {
+        let out = dispatch(&["--period".to_string(), "year".to_string()]);
+        assert_eq!(out.code, 2);
+        assert!(out.stderr.contains("day|week|month"));
+    }
+
+    #[test]
+    fn dispatch_write_round_trips_markdown_to_disk() {
+        let _g = crate::testutil::ENV_LOCK.lock().unwrap();
+        let dir = crate::testutil::temp_dir("observe");
+        let evfile = dir.join("honesty-events.jsonl");
+        let day = 20_616 * 86_400;
+        std::fs::write(
+            &evfile,
+            format!(
+                "{{\"ts\":{},\"kind\":\"gate\",\"class\":\"save\",\"reason\":\"ceiling\",\"est\":100000}}\n",
+                day
+            ),
+        )
+        .unwrap();
+        std::env::set_var("I2P_HONESTY_EVENTS", &evfile);
+        let out = dispatch(&[
+            "--period".to_string(),
+            "month".to_string(),
+            "--write".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ]);
+        std::env::remove_var("I2P_HONESTY_EVENTS");
+        assert_eq!(out.code, 0);
+        assert!(out.stdout.starts_with("wrote "));
+        let md = std::fs::read_to_string(dir.join("honesty.md")).unwrap();
+        assert!(md.contains("1 SAVE"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn accuracy_folds_into_per_period_mape() {
         let day = 20_616 * 86_400;
         let lines = [

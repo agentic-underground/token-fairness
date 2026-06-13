@@ -84,14 +84,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: install cross linker (linux musl)
+      # The linux-musl targets need a cross linker — `cross` supplies it in a container (the bare
+      # `cargo build` failed aarch64 with `collect2: ld returned 1`). macOS targets build natively.
+      - name: install cross (linux musl targets)
         if: contains(matrix.target, 'linux-musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: install aarch64 musl cross
-        if: matrix.target == 'aarch64-unknown-linux-musl'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: build
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross || true
-      - run: cargo build --release --target ${{ matrix.target }}
+          if [[ "${{ matrix.target }}" == *linux-musl ]]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: tf-${{ matrix.target }}

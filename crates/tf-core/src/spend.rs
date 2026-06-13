@@ -337,4 +337,96 @@ mod tests {
         let lines = vec!["", "not json", r#"{"type":"system"}"#];
         assert!(aggregate(lines, &prices()).is_empty());
     }
+
+    // ---- dispatch: fixture-based (explicit --project-dir/--session, no env) ----
+
+    fn write(p: &std::path::Path, body: &str) {
+        if let Some(d) = p.parent() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(p, body).unwrap();
+    }
+
+    /// A main transcript + a subagent transcript under `<sid>/` — exactly what `tf spend` discovers
+    /// and reconciles. Returns the project dir; caller removes it.
+    fn fixture_project(sid: &str) -> PathBuf {
+        let proj = crate::testutil::temp_dir("spend");
+        // main transcript: 1M opus input ($5.00) + a haiku turn
+        write(
+            &proj.join(format!("{}.jsonl", sid)),
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":0}}}\n\
+             {\"type\":\"user\",\"message\":{\"content\":\"x\"}}\n",
+        );
+        // subagent transcript (under <sid>/): a fan-out turn session.json would miss
+        write(
+            &proj.join(sid).join("sub-1.jsonl"),
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-haiku-4-5\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":500}}}\n",
+        );
+        proj
+    }
+
+    #[test]
+    fn dispatch_reconciles_main_plus_subagent_transcripts() {
+        let proj = fixture_project("SIDA");
+        let out = dispatch(&[
+            "--project-dir".into(),
+            proj.to_string_lossy().into_owned(),
+            "--session".into(),
+            "SIDA".into(),
+        ]);
+        assert_eq!(out.code, 0);
+        // Two transcripts discovered (main + subagent), both models present.
+        assert!(out.stdout.contains("\"transcripts\":2"));
+        assert!(out.stdout.contains("claude-opus-4-8"));
+        assert!(out.stdout.contains("claude-haiku-4-5"));
+        // opus 1,000,000 + haiku 1,500 = 1,001,500 total tokens.
+        assert!(out.stdout.contains("\"total_tokens\":1001500"));
+        // session.json is absent here ⇒ everything is "untracked" (the gap tf spend surfaces).
+        assert!(out.stdout.contains("\"untracked_by_session_json\":1001500"));
+        std::fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn dispatch_errors_when_no_transcripts_for_session() {
+        let proj = crate::testutil::temp_dir("spend-empty");
+        let out = dispatch(&[
+            "--project-dir".into(),
+            proj.to_string_lossy().into_owned(),
+            "--session".into(),
+            "NOPE".into(),
+        ]);
+        assert_eq!(out.code, 2);
+        assert!(out.stderr.contains("no transcripts"));
+        std::fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn dispatch_capture_appends_one_spend_event() {
+        let _g = crate::testutil::ENV_LOCK.lock().unwrap();
+        let proj = fixture_project("SIDB");
+        let evdir = crate::testutil::temp_dir("spend-ev");
+        let evfile = evdir.join("honesty-events.jsonl");
+        std::env::set_var("I2P_HONESTY_EVENTS", &evfile);
+        let out = dispatch(&[
+            "--project-dir".into(),
+            proj.to_string_lossy().into_owned(),
+            "--session".into(),
+            "SIDB".into(),
+            "--capture".into(),
+        ]);
+        std::env::remove_var("I2P_HONESTY_EVENTS");
+        assert_eq!(out.code, 0);
+        let body = std::fs::read_to_string(&evfile).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 1, "exactly one spend event appended");
+        let v: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(v.get("kind").and_then(|x| x.as_str()), Some("spend"));
+        assert_eq!(v.get("session").and_then(|x| x.as_str()), Some("SIDB"));
+        assert_eq!(
+            v.get("total_tokens").and_then(|x| x.as_i64()),
+            Some(1_001_500)
+        );
+        std::fs::remove_dir_all(&proj).ok();
+        std::fs::remove_dir_all(&evdir).ok();
+    }
 }
