@@ -10,9 +10,9 @@
 //! Feature gates:
 //!   - MCP tests: require --features mcp        → #[cfg(feature = "mcp")]
 //!   - Dashboard tests: require --features dashboard → #[cfg(feature = "dashboard")]
-//!   - Remaining: no feature gate (CLI always present)
+//!   - Journal tests: require --features journal     → tf journal subcommand
 //!
-//! Run with: cargo test --test commands_journal_6 --features tf-cli/mcp,tf-cli/dashboard
+//! Run with: cargo test --test commands_journal_6 --features tf-cli/mcp,tf-cli/dashboard,tf-cli/journal
 
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write as IoWrite};
@@ -186,7 +186,10 @@ fn feature_tf_help_not_hardcoded_subcommand_list() {
     let (stdout, _stderr, code) = run_tf(&["--help"], &[]);
     assert_eq!(code, 0, "tf --help must exit 0");
     // The output must be non-empty so the skill has something to forward.
-    assert!(!stdout.trim().is_empty(), "tf --help must produce non-empty output");
+    assert!(
+        !stdout.trim().is_empty(),
+        "tf --help must produce non-empty output"
+    );
 }
 
 /// @EARS-TF-6-002 @unhappy
@@ -219,9 +222,8 @@ fn feature_tf_report_runs_honesty_report() {
     let ds = dir.to_str().unwrap();
     // The CLI report command is always present. We invoke it and confirm it exits
     // and produces output. The skill surfaces this verbatim — this test pins the binary contract.
-    let (stdout, stderr, code) = run_tf(&["report", ".", "--honesty"], &[
-        ("I2P_COST_STATE_DIR", ds),
-    ]);
+    let (stdout, stderr, code) =
+        run_tf(&["report", ".", "--honesty"], &[("I2P_COST_STATE_DIR", ds)]);
     // The command exists and produces output (may fail on missing state — that's the unhappy path).
     // Here we verify the subcommand is recognised (not "unrecognised command").
     let unrecognised = stderr.to_lowercase().contains("unrecognised")
@@ -277,10 +279,8 @@ fn feature_tf_reset_rebaselines_session() {
     )
     .unwrap();
 
-    let (_stdout, _stderr, code) = run_tf(
-        &["budget", "set", "--reset"],
-        &[("I2P_COST_STATE_DIR", ds)],
-    );
+    let (_stdout, _stderr, code) =
+        run_tf(&["budget", "set", "--reset"], &[("I2P_COST_STATE_DIR", ds)]);
     // RED: `budget::set_field` does not yet accept the MCP key mapping. The existing
     // `budget set --reset` path exists but the TF-6-* MCP wrappers do not yet exist.
     // This test verifies the EXISTING reset path (which IS implemented); it goes green
@@ -331,15 +331,22 @@ fn feature_tf_reset_warns_when_journal_entry_open() {
         &["journal", "read"],
         &[
             ("I2P_COST_STATE_DIR", ds),
-            ("I2P_COST_JOURNAL_OPEN", dir.join("journal-open.json").to_str().unwrap()),
+            (
+                "I2P_COST_JOURNAL_OPEN",
+                dir.join("journal-open.json").to_str().unwrap(),
+            ),
         ],
     );
     // GREEN: `tf journal read` exits 0 and emits a valid JSON array (TF-7-020). The finalised
     // journal is absent here (only journal-open.json was seeded), so the array is empty `[]`; the
     // OPEN-entry detection the skill performs reads journal-open.json directly, per TF-6-005.
-    assert_eq!(code, 0, "tf journal read must exit 0 (TF-7-020); stdout={stdout}");
-    let _arr: Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("tf journal read must emit valid JSON; err={e}; stdout={stdout}"));
+    assert_eq!(
+        code, 0,
+        "tf journal read must exit 0 (TF-7-020); stdout={stdout}"
+    );
+    let _arr: Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("tf journal read must emit valid JSON; err={e}; stdout={stdout}")
+    });
 }
 
 /// @EARS-TF-6-004 @abuse
@@ -349,11 +356,12 @@ fn feature_tf_reset_fresh_session_no_prior_baseline() {
     let dir = temp_dir("reset-fresh");
     let ds = dir.to_str().unwrap();
     // No session.json, no budget.json — completely fresh state.
-    let (_stdout, _stderr, code) = run_tf(
-        &["budget", "set", "--reset"],
-        &[("I2P_COST_STATE_DIR", ds)],
+    let (_stdout, _stderr, code) =
+        run_tf(&["budget", "set", "--reset"], &[("I2P_COST_STATE_DIR", ds)]);
+    assert_eq!(
+        code, 0,
+        "tf budget set --reset on fresh session must exit 0"
     );
-    assert_eq!(code, 0, "tf budget set --reset on fresh session must exit 0");
     // budget.json must now exist with baseline_tokens == 0 (no session tokens yet).
     let bj = read_budget(&dir);
     assert_eq!(
@@ -375,9 +383,7 @@ fn feature_tf_reset_fresh_session_no_prior_baseline() {
 #[test]
 fn feature_mcp_budget_set_weekly_cap_persists() {
     let dir = temp_dir("budget-weekly");
-    let mut srv = spawn_mcp(
-        &[("I2P_COST_STATE_DIR", dir.as_path())],
-    );
+    let mut srv = spawn_mcp(&[("I2P_COST_STATE_DIR", dir.as_path())]);
 
     let (_resp, result) = mcp_call(
         &mut srv,
@@ -386,7 +392,10 @@ fn feature_mcp_budget_set_weekly_cap_persists() {
     );
     // RED: "weekly_cap" key not yet in the allow-list → error expected at RED state.
     // When GREEN: success == true, new_value == 2000000.
-    let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+    let success = result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let new_value = result.get("new_value").and_then(|v| v.as_i64());
     assert!(
         success && new_value == Some(2000000),
@@ -410,9 +419,7 @@ fn feature_mcp_budget_set_weekly_cap_persists() {
 #[test]
 fn feature_mcp_budget_set_headroom_pct_round_trip() {
     let dir = temp_dir("budget-headroom");
-    let mut srv = spawn_mcp(
-        &[("I2P_COST_STATE_DIR", dir.as_path())],
-    );
+    let mut srv = spawn_mcp(&[("I2P_COST_STATE_DIR", dir.as_path())]);
 
     // Set headroom_pct.
     let (_resp, set_result) = mcp_call(
@@ -421,7 +428,10 @@ fn feature_mcp_budget_set_headroom_pct_round_trip() {
         Some(json!({"key": "headroom_pct", "value": 15})),
     );
     assert!(
-        set_result.get("success").and_then(|v| v.as_bool()).unwrap_or(false),
+        set_result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "RED: tf_budget_set headroom_pct not yet accepted; result={set_result}"
     );
 
@@ -464,9 +474,7 @@ fn feature_mcp_budget_read_returns_weekly_cap() {
         &dir,
         r#"{"session_cap_tokens":900000,"per_fanout_cap_tokens":80000,"weekly_cap_tokens":2000000,"headroom_pct":15,"baseline_tokens":0}"#,
     );
-    let mut srv = spawn_mcp(
-        &[("I2P_COST_STATE_DIR", dir.as_path())],
-    );
+    let mut srv = spawn_mcp(&[("I2P_COST_STATE_DIR", dir.as_path())]);
 
     let (_resp, result) = mcp_call(&mut srv, "tf_budget_read", None);
     assert_eq!(
@@ -475,10 +483,22 @@ fn feature_mcp_budget_read_returns_weekly_cap() {
         "RED: tf_budget_read must include weekly_cap; got={result}"
     );
     // No existing key may be removed.
-    assert!(result.get("session_cap").is_some(), "session_cap must still be present");
-    assert!(result.get("per_fanout_cap").is_some(), "per_fanout_cap must still be present");
-    assert!(result.get("current_spend").is_some(), "current_spend must still be present");
-    assert!(result.get("fanout_spend").is_some(), "fanout_spend must still be present");
+    assert!(
+        result.get("session_cap").is_some(),
+        "session_cap must still be present"
+    );
+    assert!(
+        result.get("per_fanout_cap").is_some(),
+        "per_fanout_cap must still be present"
+    );
+    assert!(
+        result.get("current_spend").is_some(),
+        "current_spend must still be present"
+    );
+    assert!(
+        result.get("fanout_spend").is_some(),
+        "fanout_spend must still be present"
+    );
 }
 
 /// @EARS-TF-6-009 @happy
@@ -489,9 +509,7 @@ fn feature_mcp_budget_read_returns_weekly_cap() {
 #[test]
 fn feature_mcp_budget_set_legacy_session_cap_still_works() {
     let dir = temp_dir("budget-legacy-session");
-    let mut srv = spawn_mcp(
-        &[("I2P_COST_STATE_DIR", dir.as_path())],
-    );
+    let mut srv = spawn_mcp(&[("I2P_COST_STATE_DIR", dir.as_path())]);
 
     let (_resp, result) = mcp_call(
         &mut srv,
@@ -499,7 +517,10 @@ fn feature_mcp_budget_set_legacy_session_cap_still_works() {
         Some(json!({"key": "session_cap", "value": 60000})),
     );
     assert!(
-        result.get("success").and_then(|v| v.as_bool()).unwrap_or(false),
+        result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "tf_budget_set session_cap must still succeed; result={result}"
     );
     assert_eq!(
@@ -532,9 +553,7 @@ fn feature_mcp_budget_set_rejects_unknown_key_without_write() {
     );
     let before = budget_bytes(&dir);
 
-    let mut srv = spawn_mcp(
-        &[("I2P_COST_STATE_DIR", dir.as_path())],
-    );
+    let mut srv = spawn_mcp(&[("I2P_COST_STATE_DIR", dir.as_path())]);
 
     let (_resp, result) = mcp_call(
         &mut srv,
@@ -542,7 +561,10 @@ fn feature_mcp_budget_set_rejects_unknown_key_without_write() {
         Some(json!({"key": "max_temperature", "value": 9000})),
     );
     // Must return an error (not success).
-    let is_success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_success = result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     assert!(
         !is_success,
         "tf_budget_set must reject an unknown key; result={result}"
@@ -550,7 +572,10 @@ fn feature_mcp_budget_set_rejects_unknown_key_without_write() {
     // The error object or message must be present.
     let has_error = result.get("error").is_some()
         || result.get("message").is_some()
-        || result.as_str().map(|s| s.to_lowercase().contains("invalid") || s.to_lowercase().contains("unknown")).unwrap_or(false);
+        || result
+            .as_str()
+            .map(|s| s.to_lowercase().contains("invalid") || s.to_lowercase().contains("unknown"))
+            .unwrap_or(false);
     assert!(
         has_error,
         "tf_budget_set must include an error indicator for unknown keys; result={result}"
