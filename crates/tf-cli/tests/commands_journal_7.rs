@@ -79,7 +79,15 @@ struct JournalEnv {
     open_path: PathBuf,
 }
 
+// `JournalEnv` is gated on `any(journal, mcp)` because the MCP-only build needs it for
+// `spawn_mcp_with_journal` + the `feature_mcp_only_*` negative test. That gate is deliberately
+// broader than the consumers of most of these helpers, which live in `journal`-gated tests
+// (verified via rust-analyzer findReferences: every method has 6-24 call sites under
+// --features journal,mcp). In the `mcp && !journal` slice only `new` is reached, so clippy
+// flags the journal-only helpers as dead. They are not vestigial — allow dead_code for the
+// permutations where a given helper has no call site rather than narrowing each method's cfg.
 #[cfg(any(feature = "journal", feature = "mcp"))]
+#[allow(dead_code)]
 impl JournalEnv {
     fn new(tag: &str) -> Self {
         let dir = temp_dir(tag);
