@@ -1,6 +1,6 @@
 # Project Roadmap
 
-> Last updated: 2026-06-14
+> Last updated: 2026-06-14 (items [6]+[7] added, AWAITING MERGE — PR #23)
 > Maintained by: Claude Code + FOUNDRY agents
 
 This document is the authoritative list of planned features for this project.
@@ -324,3 +324,81 @@ NOT auto-release on its own). `dtolnay/rust-toolchain` and `taiki-e/install-acti
 (not Node-20 JS actions). Watch for breaking changes in the v4→v5 majors (notably
 `actions/upload-artifact@v5` does not merge same-named artifacts — fine here, every artifact name is
 unique). Tracked in issue #17.
+
+---
+
+## [6] Flexible session budget controls + slash commands
+> STATUS: AWAITING MERGE (PR #23 open — feat/slash-commands-cost-journal — 2026-06-14)
+> ADDED: 2026-06-14
+> LAST UPDATED: 2026-06-14
+> PRIORITY: HIGH
+> GITHUB_ISSUE: #21
+
+**Brief Description**
+Agents needed structured budget visibility at the slash-command level and a flexible MCP budget
+write surface. Adds `/tf:help`, `/tf:report`, `/tf:reset` Scheduler plugin slash commands;
+expands `tf_budget_set`/`tf_budget_read` MCP tool keys to include `weekly_cap` and `headroom_pct`;
+ships `POST /api/budget` (loopback-only) for the dashboard Budget-Controls card; re-binds the
+dashboard HTTP server to `127.0.0.1` for security hardening.
+
+### User Stories
+- AS A Claude Code agent I WANT `/tf:help` to render live `tf --help` output SO THAT I always
+  see current commands, not a hardcoded list that can go stale
+- AS A Claude Code agent I WANT `/tf:reset` to warn me if a journal entry is open SO THAT I
+  don't accidentally lose an in-progress cost record when re-baselining
+- AS A developer I WANT to set `weekly_cap` and `headroom_pct` via MCP SO THAT I can
+  tune budget controls without leaving the agent context
+
+### EARS Specification
+TF-6-001 through TF-6-019 — see `doc/SPECIFICATION.ears.md` §Cycle [6]+[7].
+
+### Acceptance Criteria
+1. `/tf:help` renders verbatim `tf --help` output; no hardcoded command list (TF-6-001, TF-6-002)
+2. `/tf:report` renders `tf report . --honesty` (TF-6-003)
+3. `/tf:reset` re-baselines session; warns if a journal open entry exists (TF-6-004, TF-6-005)
+4. `tf_budget_set` accepts `weekly_cap` and `headroom_pct` keys; rejects unknown keys (TF-6-007..010)
+5. `tf_budget_read` returns `weekly_cap` and `headroom_pct` in addition to legacy keys (TF-6-011, TF-6-012)
+6. `POST /api/budget` updates the budget; returns new state; loopback-only bind (TF-6-016..019)
+7. Dashboard bind changed to `127.0.0.1` (TF-6-019)
+8. All 280 workspace tests green; 88.50% line coverage
+
+---
+
+## [7] Request-shape cost journal
+> STATUS: AWAITING MERGE (PR #23 open — feat/slash-commands-cost-journal — 2026-06-14)
+> ADDED: 2026-06-14
+> LAST UPDATED: 2026-06-14
+> PRIORITY: HIGH
+> GITHUB_ISSUE: #22
+> DEPENDS ON: [6] (same PR — feat/slash-commands-cost-journal)
+
+**Brief Description**
+Agents needed a durable, per-roadmap-item cost record to track token spend across sessions.
+Ships a persistent `cost-journal.jsonl` with `tf journal append|close|read` CLI subcommands
+behind a `journal` Cargo feature gate. MCP surface: `tf_journal_append`, `tf_journal_read` tools
++ `tf://cost-journal` resource (last 100 finalised records), double-gated (`journal`+`mcp`).
+Opt-in `--summarize` compression via curl subprocess (fails-open) behind a `journal-summarizer`
+gate. All paths are env-overridable for test isolation.
+
+### User Stories
+- AS A Claude Code agent I WANT `tf journal append <id> <tokens> <model>` SO THAT I can record
+  per-turn token cost against a roadmap item without manual tracking
+- AS A developer I WANT `tf journal read` to return a JSON array of finalised records SO THAT
+  I can audit total cost per item at any time
+- AS A developer I WANT journal paths to be env-overridable SO THAT story tests can isolate
+  state without polluting the real journal
+
+### EARS Specification
+TF-7-001 through TF-7-040 — see `doc/SPECIFICATION.ears.md` §Cycle [6]+[7].
+
+### Acceptance Criteria
+1. `journal_path()` honours `I2P_COST_JOURNAL` else `{state_dir}/cost-journal.jsonl` (TF-7-001)
+2. `tf journal append <id> <tokens> <model>` upserts `journal-open.json`; creates on first call (TF-7-002..010)
+3. `tf journal close <id>` finalises entry to `cost-journal.jsonl`; removes from open file (TF-7-011..016)
+4. `tf journal read` returns JSON array; supports `--id` + `--last` filters (TF-7-017..020)
+5. `tf journal` does NOT appear in `tf --help` when compiled without `journal` feature (TF-7-025, TF-7-026)
+6. `tf_journal_append` / `tf_journal_read` MCP tools work; double-gated `journal`+`mcp` (TF-7-028..030)
+7. `tf://cost-journal` MCP resource returns last 100 finalised records (TF-7-031, TF-7-032)
+8. `--summarize` compresses ask via curl subprocess; fails-open on missing key/curl failure (TF-7-033..036)
+9. Hot-hook binary (no-features compile) unaffected — zero size increase (TF-7-022..027)
+10. All 280 workspace tests green; journal.rs at 97.21% line coverage; no panics (TF-7-039, TF-7-040)
