@@ -130,6 +130,14 @@ pub fn dispatch(argv: &[String]) -> Out {
         }
     }
 
+    // Validate the report directory exists before doing any work. The `dir` argument names the
+    // project whose registry/ledgers we read; a non-existent path is an operator error, not an
+    // empty report — surface it (exit 1) rather than fabricating a report from unrelated state
+    // (EARS TF-6-003 unhappy path). The default "." (cwd) always exists.
+    if !std::path::Path::new(&dir).exists() {
+        return Out::err(format!("report: no such directory: {}", dir), 1);
+    }
+
     // The Honesty Observatory (P-I) is its own cross-time surface — delegate to observe,
     // bypassing the scheduler/estimator sections this report otherwise renders.
     if mode == "honesty" {
