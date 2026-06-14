@@ -105,7 +105,7 @@ jobs:
           else
             cargo build --release -p tf-cli --features mcp,dashboard --target ${{ matrix.target }}
           fi
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: tf-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/tf
