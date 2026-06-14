@@ -189,30 +189,36 @@ pub fn handle_tf_gate(params: &Value) -> Result<Value, String> {
 
 /// Handler for the `tf_budget_read` MCP tool.
 ///
-/// Returns the configured caps (real on-disk keys) plus the live folded spend.
+/// Returns the configured caps (real on-disk keys) plus the live folded spend. The cap set
+/// mirrors the [`crate::budget`] flexible-control surface: the 5-hour `session_cap`, the
+/// `per_fanout_cap`, the 7-day `weekly_cap`, and the `headroom_pct` ceiling — every key the
+/// `tf_budget_set` allow-list accepts is read back here so a set/read round-trip is symmetric.
 pub fn handle_tf_budget_read(_params: &Value) -> Result<Value, String> {
     const DEFAULT_SESSION_CAP: i64 = 2_000_000;
     const DEFAULT_PER_FANOUT_CAP: i64 = 150_000;
 
     let budget_obj = state::read_json(&budget_file());
+    // Read an i64 on-disk key with a fallback (the cap/headroom fields are all integers).
+    let read_i64 = |key: &str, default: i64| -> i64 {
+        budget_obj
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(default)
+    };
 
-    let session_cap = budget_obj
-        .as_ref()
-        .and_then(|v| v.get("session_cap_tokens"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(DEFAULT_SESSION_CAP);
-
-    let per_fanout_cap = budget_obj
-        .as_ref()
-        .and_then(|v| v.get("per_fanout_cap_tokens"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(DEFAULT_PER_FANOUT_CAP);
+    let session_cap = read_i64("session_cap_tokens", DEFAULT_SESSION_CAP);
+    let per_fanout_cap = read_i64("per_fanout_cap_tokens", DEFAULT_PER_FANOUT_CAP);
+    let weekly_cap = read_i64("weekly_cap_tokens", crate::budget::DEFAULT_WEEKLY_CAP);
+    let headroom_pct = read_i64("headroom_pct", crate::windows::DEFAULT_HEADROOM);
 
     let (current_spend, fanout_spend) = fold_spend();
 
     Ok(json!({
         "session_cap": session_cap,
         "per_fanout_cap": per_fanout_cap,
+        "weekly_cap": weekly_cap,
+        "headroom_pct": headroom_pct,
         "current_spend": current_spend,
         "fanout_spend": fanout_spend
     }))
@@ -220,7 +226,10 @@ pub fn handle_tf_budget_read(_params: &Value) -> Result<Value, String> {
 
 /// Handler for the `tf_budget_set` MCP tool.
 ///
-/// Updates a budget configuration key (session_cap or per_fanout_cap).
+/// Updates a single budget configuration key. The allow-list is the flexible-control surface:
+/// `session_cap`/`per_fanout_cap`/`weekly_cap` map to their `*_tokens` on-disk fields, and
+/// `headroom_pct` is stored verbatim (it is a percentage, not a token count). A key outside the
+/// allow-list is rejected WITHOUT touching budget.json, so a bad request never mutates state.
 pub fn handle_tf_budget_set(params: &Value) -> Result<Value, String> {
     let key = params
         .get("key")
@@ -235,8 +244,15 @@ pub fn handle_tf_budget_set(params: &Value) -> Result<Value, String> {
     let json_key = match key {
         "session_cap" => "session_cap_tokens",
         "per_fanout_cap" => "per_fanout_cap_tokens",
+        "weekly_cap" => "weekly_cap_tokens",
+        "headroom_pct" => "headroom_pct",
         _ => return Err(format!("invalid key: {}", key)),
     };
+
+    // headroom_pct is a percentage ceiling: reject out-of-range values before any write.
+    if key == "headroom_pct" && !(0..=100).contains(&value) {
+        return Err(format!("invalid headroom_pct: {} (expected 0-100)", value));
+    }
 
     let mut budget_obj = state::read_json(&budget_file()).unwrap_or_else(|| json!({}));
 
@@ -639,6 +655,10 @@ pub fn dispatch_tool(method: &str, params: &Value) -> Result<Value, String> {
         "tf_plan_open" => handle_tf_plan_open(params),
         "tf_plan_close" => handle_tf_plan_close(params),
         "tf_schedule_toggle" => handle_tf_schedule_toggle(params),
+        #[cfg(feature = "journal")]
+        "tf_journal_append" => crate::journal::mcp_append(params),
+        #[cfg(feature = "journal")]
+        "tf_journal_read" => crate::journal::mcp_read(params),
         _ => Err(format!("unknown method: {}", method)),
     };
     // Record exactly one audit line per call (metadata only); never let it break the response.
@@ -653,6 +673,8 @@ pub fn dispatch_resource(uri: &str) -> Result<Value, String> {
         "tf://status" => handle_resource_status(),
         "tf://calibration" => handle_resource_calibration(),
         "tf://events" => handle_resource_events(),
+        #[cfg(feature = "journal")]
+        "tf://cost-journal" => crate::journal::mcp_resource_last_100(),
         _ => Err(format!("unknown resource: {}", uri)),
     };
     // A resource read carries no params object; record the URI as the method, empty params.
@@ -664,7 +686,8 @@ pub fn dispatch_resource(uri: &str) -> Result<Value, String> {
 /// The MCP tool catalogue, for the `tools/list` handshake. Names + one-line descriptions.
 pub fn tools_list() -> Value {
     let tool = |name: &str, desc: &str| json!({ "name": name, "description": desc });
-    json!({
+    #[allow(unused_mut)]
+    let mut base = json!({
         "tools": [
             tool("tf_gate", "Evaluate a token ceiling and return allow|deny."),
             tool("tf_budget_read", "Read configured caps and live folded spend."),
@@ -675,21 +698,44 @@ pub fn tools_list() -> Value {
             tool("tf_signal", "Set a gate/budget/observability signal to OK|ERROR."),
             tool("tf_plan_open", "Open a budget plan."),
             tool("tf_plan_close", "Close an open budget plan."),
-            tool("tf_schedule_toggle", "Enable/disable the window-aware schedule gate.")
+            tool("tf_schedule_toggle", "Enable/disable the window-aware schedule gate."),
         ]
-    })
+    });
+    // The journal tools are feature-gated: only advertised when the journal feature is built.
+    #[cfg(feature = "journal")]
+    if let Some(tools) = base.get_mut("tools").and_then(|t| t.as_array_mut()) {
+        tools.push(tool(
+            "tf_journal_append",
+            "Append tokens for a model to an open cost-journal entry.",
+        ));
+        tools.push(tool(
+            "tf_journal_read",
+            "Read finalised cost-journal records.",
+        ));
+    }
+    base
 }
 
 /// The MCP resource catalogue, for the `resources/list` handshake.
 pub fn resources_list() -> Value {
     let res = |uri: &str, desc: &str| json!({ "uri": uri, "name": uri, "description": desc });
-    json!({
+    #[allow(unused_mut)]
+    let mut base = json!({
         "resources": [
             res("tf://status", "Live budget + signal snapshot."),
             res("tf://calibration", "Rolling-window definitions and next boundary."),
-            res("tf://events", "Recent honesty-ledger events (last 100).")
+            res("tf://events", "Recent honesty-ledger events (last 100)."),
         ]
-    })
+    });
+    // The cost-journal resource is feature-gated: only listed when the journal feature is built.
+    #[cfg(feature = "journal")]
+    if let Some(resources) = base.get_mut("resources").and_then(|r| r.as_array_mut()) {
+        resources.push(res(
+            "tf://cost-journal",
+            "Finalised cost-journal records (last 100).",
+        ));
+    }
+    base
 }
 
 // ============================================================================
@@ -1094,14 +1140,24 @@ mod tests {
 
     #[test]
     fn test_tools_list_enumerates_all_ten() {
+        // Ten always-present tools, plus the two journal tools when that feature is built.
+        let expected = if cfg!(feature = "journal") { 12 } else { 10 };
         let list = tools_list();
-        assert_eq!(list.get("tools").unwrap().as_array().unwrap().len(), 10);
+        assert_eq!(
+            list.get("tools").unwrap().as_array().unwrap().len(),
+            expected
+        );
     }
 
     #[test]
     fn test_resources_list_enumerates_all_three() {
+        // Three always-present resources, plus tf://cost-journal when the journal feature is built.
+        let expected = if cfg!(feature = "journal") { 4 } else { 3 };
         let list = resources_list();
-        assert_eq!(list.get("resources").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(
+            list.get("resources").unwrap().as_array().unwrap().len(),
+            expected
+        );
     }
 
     // ---- MCP invocation audit log (metadata-only) ----

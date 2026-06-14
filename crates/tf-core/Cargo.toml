@@ -9,6 +9,11 @@ license.workspace = true
 mcp = []
 # Dashboard and telemetry pipeline (feature-gated)
 dashboard = []
+# Request-shape cost journal (feature-gated to protect hook binary size).
+# Implementation will live in src/journal.rs behind #[cfg(feature="journal")].
+journal = []
+# Optional ask-summarizer via curl subprocess (fails-open). Depends on journal.
+journal-summarizer = ["journal"]
 
 # Parsing only for the arithmetic verbs (all output hand-formatted, see fmt.rs). The
 # stateful verbs (ledger/registry/snapshot/signal) DO serialize JSON state files; we use

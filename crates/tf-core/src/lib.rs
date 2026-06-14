@@ -14,6 +14,8 @@ pub mod dashboard;
 pub mod ensemble;
 pub mod estimate;
 pub mod fmt;
+#[cfg(feature = "journal")]
+pub mod journal;
 pub mod ledger;
 #[cfg(feature = "mcp")]
 pub mod mcp;

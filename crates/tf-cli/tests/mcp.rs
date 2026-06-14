@@ -125,7 +125,11 @@ fn test_tools_list_enumerates_tools() {
     let (_resp, result) = send_tool_call(&mut server, "tools/list", None);
     let result = result.expect("tools/list must return a result");
     let tools = result.get("tools").unwrap().as_array().unwrap();
-    assert_eq!(tools.len(), 10, "all ten tools enumerated");
+    // Ten always-present tools, plus the two journal tools when the journal feature is built
+    // (the subprocess inherits the test build's features). TF-7-030: journal tools are
+    // double-gated on mcp+journal.
+    let expected = if cfg!(feature = "journal") { 12 } else { 10 };
+    assert_eq!(tools.len(), expected, "tool catalogue enumerated");
     let names: Vec<&str> = tools
         .iter()
         .map(|t| t.get("name").unwrap().as_str().unwrap())
@@ -140,7 +144,10 @@ fn test_resources_list_enumerates_resources() {
     let (_resp, result) = send_tool_call(&mut server, "resources/list", None);
     let result = result.expect("resources/list must return a result");
     let resources = result.get("resources").unwrap().as_array().unwrap();
-    assert_eq!(resources.len(), 3);
+    // Three always-present resources, plus tf://cost-journal when the journal feature is built
+    // (TF-7-032: the existing `== 3` assertion becomes `== 4` under journal).
+    let expected = if cfg!(feature = "journal") { 4 } else { 3 };
+    assert_eq!(resources.len(), expected);
 }
 
 #[test]

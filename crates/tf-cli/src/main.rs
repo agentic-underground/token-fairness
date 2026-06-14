@@ -171,6 +171,8 @@ fn main() {
         "session-boundary" => budget::session_boundary(&read_stdin()),
         "spend" => spend::dispatch(rest),
         "observe" => observe::dispatch(rest),
+        #[cfg(feature = "journal")]
+        "journal" => tf_core::journal::dispatch(rest),
         #[cfg(feature = "mcp")]
         "mcp" => mcp_server::run(),
         #[cfg(feature = "dashboard")]
@@ -185,19 +187,24 @@ fn main() {
             }
         }
         "" => Out::err("usage: tf <command> [args]", 2),
-        "--help" | "-h" | "help" => Out::ok(
-            "usage: tf <command> [args]\n\n\
-             Core:      budget  gate  plan  plan-open  plan-close  doctor  snapshot  session-boundary\n\
-             Reporting: report  spend  signal  verify-payload  observe\n\
-             Fanout:    preflight  preflight-spend  preflight-fanout  estimate\n\
-             Estimator: calibrate  estimator  route\n\
-             Offpeak:   offpeak-window  offpeak-budget  run-offpeak\n\
-             Durable:   ledger  registry  oscron\n\
-             MCP:       mcp\n\
-             Dashboard: dashboard\n\n\
-             Run `tf <command>` with no args for per-command usage.\n"
-                .to_string(),
-        ),
+        "--help" | "-h" | "help" => {
+            let mut help = String::from(
+                "usage: tf <command> [args]\n\n\
+                 Core:      budget  gate  plan  plan-open  plan-close  doctor  snapshot  session-boundary\n\
+                 Reporting: report  spend  signal  verify-payload  observe\n\
+                 Fanout:    preflight  preflight-spend  preflight-fanout  estimate\n\
+                 Estimator: calibrate  estimator  route\n\
+                 Offpeak:   offpeak-window  offpeak-budget  run-offpeak\n\
+                 Durable:   ledger  registry  oscron\n\
+                 MCP:       mcp\n\
+                 Dashboard: dashboard\n",
+            );
+            // The journal subcommand is feature-gated; a no-features binary must not advertise it.
+            #[cfg(feature = "journal")]
+            help.push_str("Journal:   journal\n");
+            help.push_str("\nRun `tf <command>` with no args for per-command usage.\n");
+            Out::ok(help)
+        }
         other => Out::err(format!("tf: unknown command '{}'", other), 2),
     };
     emit(out);

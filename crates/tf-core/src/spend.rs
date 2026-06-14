@@ -23,8 +23,9 @@ pub type PriceRow = (f64, f64, f64, f64);
 pub type PriceTable = Vec<(String, PriceRow)>;
 
 /// The 5-column model-prices.tsv canon, matching `session-tokens.sh` (which prices cache too;
-/// routing.rs only keeps in/out).
-fn default_prices() -> Vec<(&'static str, PriceRow)> {
+/// routing.rs only keeps in/out). `pub` so the cost journal ([`crate::journal`]) prices its
+/// finalised records against the SAME per-model rates this audit uses — one source of truth.
+pub fn default_prices() -> Vec<(&'static str, PriceRow)> {
     vec![
         ("claude-opus-4", (5.00, 25.00, 6.25, 0.50)),
         ("claude-sonnet-4", (3.00, 15.00, 3.75, 0.30)),
@@ -77,6 +78,34 @@ fn price_of<'a>(prices: &'a [(String, PriceRow)], model: &str) -> Option<&'a Pri
         .iter()
         .find(|(k, _)| model.starts_with(k.as_str()))
         .map(|(_, v)| v)
+}
+
+/// Price an AGGREGATE per-model token map for the cost journal ([`crate::journal`]).
+///
+/// The journal records a single total token count per model (request-shape granularity — it does
+/// not split input/output/cache the way a transcript audit does), so each model's tokens are
+/// priced at its INPUT rate (the first column of its [`PriceRow`]) drawn from the same
+/// [`default_prices`] canon `tf spend` uses. An UNPRICED model (no prefix match) contributes its
+/// tokens to the total but $0.00 cost — it is listed, never silently absorbed, and never an error.
+///
+/// Returns `(per_model, total_tokens, total_cost_usd)` where `per_model` is one
+/// `(model, tokens, cost_usd)` tuple per input model, in the map's (sorted) key order.
+pub fn price_by_model(by_model: &BTreeMap<String, i64>) -> (Vec<(String, i64, f64)>, i64, f64) {
+    let prices = load_prices();
+    let mut per_model: Vec<(String, i64, f64)> = Vec::with_capacity(by_model.len());
+    let mut total_tokens = 0i64;
+    let mut total_cost = 0.0f64;
+    for (model, &tokens) in by_model {
+        let cost = match price_of(&prices, model) {
+            // input rate ($/1M tokens) applied to the aggregate token count.
+            Some((input_rate, _, _, _)) => tokens as f64 * input_rate / 1_000_000.0,
+            None => 0.0,
+        };
+        total_tokens += tokens;
+        total_cost += cost;
+        per_model.push((model.clone(), tokens, cost));
+    }
+    (per_model, total_tokens, total_cost)
 }
 
 /// Per-model running totals.
@@ -336,6 +365,32 @@ mod tests {
     fn garbage_and_empty_lines_are_skipped() {
         let lines = vec!["", "not json", r#"{"type":"system"}"#];
         assert!(aggregate(lines, &prices()).is_empty());
+    }
+
+    #[test]
+    fn price_by_model_prices_known_and_zero_costs_unknown() {
+        let mut m: BTreeMap<String, i64> = BTreeMap::new();
+        m.insert("claude-opus-4-8".into(), 1_000_000); // input rate $5/1M → $5.00
+        m.insert("unknown-future-model".into(), 10_000); // unpriced → $0.00, still counted
+        let (per_model, total_tokens, total_cost) = price_by_model(&m);
+        assert_eq!(total_tokens, 1_010_000);
+        assert!((total_cost - 5.0).abs() < 1e-9);
+        // BTreeMap order: "claude-opus-4-8" sorts before "unknown-future-model".
+        assert_eq!(per_model[0].0, "claude-opus-4-8");
+        assert_eq!(per_model[0].1, 1_000_000);
+        assert!((per_model[0].2 - 5.0).abs() < 1e-9);
+        assert_eq!(per_model[1].0, "unknown-future-model");
+        assert_eq!(per_model[1].1, 10_000);
+        assert_eq!(per_model[1].2, 0.0);
+    }
+
+    #[test]
+    fn price_by_model_empty_map_is_zero() {
+        let m: BTreeMap<String, i64> = BTreeMap::new();
+        let (per_model, total_tokens, total_cost) = price_by_model(&m);
+        assert!(per_model.is_empty());
+        assert_eq!(total_tokens, 0);
+        assert_eq!(total_cost, 0.0);
     }
 
     // ---- dispatch: fixture-based (explicit --project-dir/--session, no env) ----

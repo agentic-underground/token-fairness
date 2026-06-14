@@ -137,17 +137,27 @@ fn offpeak_budget_vectors() {
 
 #[test]
 fn estimate_vectors() {
+    // Isolated calibration file: the seed-state vectors below (samples:0, ratio:1.0, SEEDING)
+    // only hold against an empty ledger. Without this override `tf estimate` reads the real
+    // HOME calibration and applies any learned `plan:large`/`brandnewthing` ratio — making the
+    // test pass or fail depending on the developer's machine state. Matches the per-process
+    // I2P_CALIBRATION_FILE isolation used by every other estimator/calibrate test in this file.
+    let f = std::env::temp_dir().join(format!("tf-est-vec-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&f);
+    let fp = f.to_str().unwrap();
+    let env = [("I2P_CALIBRATION_FILE", fp)];
+
     assert_line(
         &["estimate", "--class", "large"],
         "",
-        &[],
+        &env,
         r#"{"name":"plan:large","per_unit":250000,"basis":"class","confidence":"low","fanout":1,"ratio":1.0,"est_total":250000,"convergence":{"samples":0,"mean_ratio":1.0000,"sd":0.0000,"p95_band_pct":60.0,"tier":"SEEDING","prev_band":-1.0,"trend":"flat"},"interval":[100000,400000]}"#,
         0,
     );
     assert_line(
         &["estimate", "--name", "brandnewthing", "--width", "4"],
         "",
-        &[],
+        &env,
         r#"{"name":"brandnewthing","per_unit":20000,"basis":"seed","confidence":"low","fanout":4,"ratio":1.0,"est_total":80000,"convergence":{"samples":0,"mean_ratio":1.0000,"sd":0.0000,"p95_band_pct":60.0,"tier":"SEEDING","prev_band":-1.0,"trend":"flat"},"interval":[32000,128000]}"#,
         0,
     );

@@ -78,7 +78,9 @@ impl DashboardArgs {
                              --prometheus         Enable Prometheus metrics export at GET /metrics\n  \
                              --port <PORT>        Port to bind (default 8080, or $TF_DASHBOARD_PORT)\n  \
                              --help               Show this help message\n\n\
-                             The dashboard server binds to 0.0.0.0 on the chosen port (all interfaces).\n\
+                             The dashboard server binds ONLY to 127.0.0.1 (loopback) on the chosen \
+                             port — it is never exposed to other interfaces, preventing \
+                             network-adjacent gate-ceiling manipulation.\n\
                              Tip: if port 8080 is already taken (e.g. cadvisor), run \
                              `tf dashboard --port 8088`.\n",
                         ),
@@ -98,7 +100,8 @@ impl DashboardArgs {
 /// Returns Out with status and exit code.
 pub fn run(args: DashboardArgs) -> Out {
     println!(
-        "Dashboard running on 0.0.0.0:{} (all interfaces) — open http://localhost:{}",
+        "Dashboard running on 127.0.0.1:{} (loopback only — prevents network-adjacent \
+         gate-ceiling manipulation) — open http://localhost:{}",
         args.port, args.port
     );
     if args.prometheus {
@@ -367,15 +370,17 @@ fn build_router(
     router.with_state(broadcast_tx)
 }
 
-/// Start the axum HTTP server on 0.0.0.0:`port` (default 8080).
+/// Start the axum HTTP server on 127.0.0.1:`port` (default 8080), loopback-only.
 async fn start_server(enable_prometheus: bool, port: u16) -> Result<(), String> {
     // Start the single events-journal watcher and get the broadcast sender that `/ws`
     // connections subscribe to. One watcher fans out to all clients.
     let broadcast_tx = spawn_event_broadcaster();
     let router = build_router(enable_prometheus, broadcast_tx);
 
-    // Bind and listen on all interfaces (0.0.0.0) so remote clients can connect
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+    // Bind ONLY to loopback (127.0.0.1): the dashboard exposes a budget-write surface, so binding
+    // to all interfaces would expose network-adjacent gate-ceiling manipulation. Loopback-only
+    // confines the write surface to the local host (EARS TF-6-019).
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
