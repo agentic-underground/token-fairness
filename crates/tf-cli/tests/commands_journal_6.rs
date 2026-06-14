@@ -14,10 +14,15 @@
 //!
 //! Run with: cargo test --test commands_journal_6 --features tf-cli/mcp,tf-cli/dashboard,tf-cli/journal
 
-use serde_json::{json, Value};
+#[cfg(feature = "mcp")]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(feature = "mcp")]
 use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(feature = "mcp")]
+use std::process::Child;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -71,6 +76,7 @@ fn read_budget(dir: &Path) -> Value {
 }
 
 /// Byte-for-byte contents of budget.json from `dir`.
+#[cfg(any(feature = "mcp", feature = "dashboard"))]
 fn budget_bytes(dir: &Path) -> Vec<u8> {
     std::fs::read(dir.join("budget.json")).unwrap()
 }
@@ -307,6 +313,7 @@ fn feature_tf_reset_rebaselines_session() {
 /// RED: the journal feature (TF-7-*) and the SKILL.md warning are not yet implemented.
 /// This test verifies the warning text appears in the skill's output when an open
 /// journal entry is present. At RED state the warning is absent.
+#[cfg(feature = "journal")]
 #[test]
 fn feature_tf_reset_warns_when_journal_entry_open() {
     let dir = temp_dir("reset-warn");

@@ -24,9 +24,11 @@
 use serde_json::{json, Value};
 #[allow(unused_imports)]
 use std::io::{BufRead, BufReader, Write as IoWrite};
+#[cfg(any(feature = "journal", feature = "mcp"))]
 use std::path::PathBuf;
 #[allow(unused_imports)]
 use std::process::{Child, Command, Stdio};
+#[cfg(any(feature = "journal", feature = "mcp"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ---------------------------------------------------------------------------
 
 /// Unique temp dir per test.
+#[cfg(any(feature = "journal", feature = "mcp"))]
 fn temp_dir(tag: &str) -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
     let p = std::env::temp_dir().join(format!(
@@ -69,33 +72,49 @@ fn run_tf(args: &[&str], envs: &[(&str, &str)]) -> (String, String, i32) {
 }
 
 /// Journal environment for an isolated temp dir.
+#[cfg(any(feature = "journal", feature = "mcp"))]
 struct JournalEnv {
     dir: PathBuf,
     journal_path: PathBuf,
     open_path: PathBuf,
 }
 
+#[cfg(any(feature = "journal", feature = "mcp"))]
 impl JournalEnv {
     fn new(tag: &str) -> Self {
         let dir = temp_dir(tag);
         let journal_path = dir.join("cost-journal.jsonl");
         let open_path = dir.join("journal-open.json");
-        JournalEnv { dir, journal_path, open_path }
+        JournalEnv {
+            dir,
+            journal_path,
+            open_path,
+        }
     }
 
     /// Env overrides to pass to run_tf.
     fn envs(&self) -> Vec<(String, String)> {
         vec![
-            ("I2P_COST_STATE_DIR".into(), self.dir.to_str().unwrap().into()),
-            ("I2P_COST_JOURNAL".into(), self.journal_path.to_str().unwrap().into()),
-            ("I2P_COST_JOURNAL_OPEN".into(), self.open_path.to_str().unwrap().into()),
+            (
+                "I2P_COST_STATE_DIR".into(),
+                self.dir.to_str().unwrap().into(),
+            ),
+            (
+                "I2P_COST_JOURNAL".into(),
+                self.journal_path.to_str().unwrap().into(),
+            ),
+            (
+                "I2P_COST_JOURNAL_OPEN".into(),
+                self.open_path.to_str().unwrap().into(),
+            ),
         ]
     }
 
     /// Convenience: run tf with this journal's env vars.
     fn run(&self, args: &[&str]) -> (String, String, i32) {
         let owned = self.envs();
-        let envs: Vec<(&str, &str)> = owned.iter()
+        let envs: Vec<(&str, &str)> = owned
+            .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         run_tf(args, &envs)
@@ -182,8 +201,8 @@ fn mcp_call(server: &mut McpServer, method: &str, params: Option<Value>) -> (Val
     let mut reader = BufReader::new(stdout);
     let mut resp_line = String::new();
     reader.read_line(&mut resp_line).expect("read_line");
-    let resp: Value = serde_json::from_str(&resp_line)
-        .unwrap_or_else(|_| panic!("bad JSON: {resp_line}"));
+    let resp: Value =
+        serde_json::from_str(&resp_line).unwrap_or_else(|_| panic!("bad JSON: {resp_line}"));
     let payload = resp
         .get("result")
         .or_else(|| resp.get("error"))
@@ -207,7 +226,8 @@ fn feature_journal_paths_honour_env_overrides() {
 
     // Run `tf journal append` — if journal is implemented, it must write to the
     // I2P_COST_JOURNAL_OPEN path, NOT to ~/.claude/state/i2p-cost/journal-open.json.
-    let (_stdout, _stderr, code) = env.run(&["journal", "append", "7", "50000", "claude-haiku-4-5"]);
+    let (_stdout, _stderr, code) =
+        env.run(&["journal", "append", "7", "50000", "claude-haiku-4-5"]);
 
     // RED: `tf journal` not yet implemented → exit != 0.
     // When GREEN: code == 0 AND the open entry is in env.open_path.
@@ -216,7 +236,9 @@ fn feature_journal_paths_honour_env_overrides() {
             env.open_path.exists(),
             "journal-open.json must be at the I2P_COST_JOURNAL_OPEN path, not the default"
         );
-        let open = env.read_open().expect("journal-open.json must be valid JSON");
+        let open = env
+            .read_open()
+            .expect("journal-open.json must be valid JSON");
         assert!(
             open.get("7").is_some(),
             "open entry keyed '7' must exist at the env-overridden path"
@@ -244,16 +266,16 @@ fn feature_journal_paths_honour_env_overrides() {
 fn feature_journal_append_creates_new_open_entry() {
     let env = JournalEnv::new("append-new");
 
-    let (stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "50000", "claude-haiku-4-5"],
-    );
+    let (stdout, stderr, code) = env.run(&["journal", "append", "7", "50000", "claude-haiku-4-5"]);
 
     assert_eq!(
         code, 0,
         "RED: tf journal append must exit 0; stderr={stderr} stdout={stdout}"
     );
 
-    let open = env.read_open().expect("journal-open.json must exist after append");
+    let open = env
+        .read_open()
+        .expect("journal-open.json must exist after append");
     let entry = open.get("7").expect("entry keyed '7' must be present");
 
     assert_eq!(
@@ -262,7 +284,9 @@ fn feature_journal_append_creates_new_open_entry() {
         "accumulated_tokens must equal the appended amount"
     );
     assert_eq!(
-        entry.pointer("/by_model/claude-haiku-4-5").and_then(|v| v.as_i64()),
+        entry
+            .pointer("/by_model/claude-haiku-4-5")
+            .and_then(|v| v.as_i64()),
         Some(50000),
         "by_model must have claude-haiku-4-5 == 50000"
     );
@@ -285,16 +309,16 @@ fn feature_journal_append_accumulates_same_model() {
         r#"{"7":{"ts_opened":1700000000,"ask":"draft the spec","accumulated_tokens":50000,"by_model":{"claude-haiku-4-5":50000}}}"#,
     );
 
-    let (_stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "20000", "claude-haiku-4-5"],
-    );
+    let (_stdout, stderr, code) = env.run(&["journal", "append", "7", "20000", "claude-haiku-4-5"]);
     assert_eq!(code, 0, "RED: append must succeed; stderr={stderr}");
 
     let open = env.read_open().expect("open file must exist");
     let entry = open.get("7").expect("entry '7' must exist");
 
     assert_eq!(
-        entry.pointer("/by_model/claude-haiku-4-5").and_then(|v| v.as_i64()),
+        entry
+            .pointer("/by_model/claude-haiku-4-5")
+            .and_then(|v| v.as_i64()),
         Some(70000),
         "by_model haiku tokens must be 50000 + 20000 = 70000"
     );
@@ -317,21 +341,26 @@ fn feature_journal_append_adds_second_model() {
         r#"{"7":{"ts_opened":1700000000,"ask":"draft the spec","accumulated_tokens":50000,"by_model":{"claude-haiku-4-5":50000}}}"#,
     );
 
-    let (_stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "30000", "claude-opus-4"],
+    let (_stdout, stderr, code) = env.run(&["journal", "append", "7", "30000", "claude-opus-4"]);
+    assert_eq!(
+        code, 0,
+        "RED: append second model must succeed; stderr={stderr}"
     );
-    assert_eq!(code, 0, "RED: append second model must succeed; stderr={stderr}");
 
     let open = env.read_open().expect("open file must exist");
     let entry = open.get("7").expect("entry '7' must exist");
 
     assert_eq!(
-        entry.pointer("/by_model/claude-haiku-4-5").and_then(|v| v.as_i64()),
+        entry
+            .pointer("/by_model/claude-haiku-4-5")
+            .and_then(|v| v.as_i64()),
         Some(50000),
         "haiku tokens must be unchanged"
     );
     assert_eq!(
-        entry.pointer("/by_model/claude-opus-4").and_then(|v| v.as_i64()),
+        entry
+            .pointer("/by_model/claude-opus-4")
+            .and_then(|v| v.as_i64()),
         Some(30000),
         "opus tokens must be 30000"
     );
@@ -355,10 +384,19 @@ fn feature_journal_append_ask_overwrite_and_preserve() {
     );
 
     // Overwrite ask.
-    let (_stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "10000", "claude-opus-4", "--ask", "rewrite the spec"],
+    let (_stdout, stderr, code) = env.run(&[
+        "journal",
+        "append",
+        "7",
+        "10000",
+        "claude-opus-4",
+        "--ask",
+        "rewrite the spec",
+    ]);
+    assert_eq!(
+        code, 0,
+        "RED: append with --ask must succeed; stderr={stderr}"
     );
-    assert_eq!(code, 0, "RED: append with --ask must succeed; stderr={stderr}");
     let open = env.read_open().expect("open file");
     assert_eq!(
         open.pointer("/7/ask").and_then(|v| v.as_str()),
@@ -367,10 +405,11 @@ fn feature_journal_append_ask_overwrite_and_preserve() {
     );
 
     // Append without --ask — must preserve the previous ask.
-    let (_stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "5000", "claude-opus-4"],
+    let (_stdout, stderr, code) = env.run(&["journal", "append", "7", "5000", "claude-opus-4"]);
+    assert_eq!(
+        code, 0,
+        "RED: append without --ask must succeed; stderr={stderr}"
     );
-    assert_eq!(code, 0, "RED: append without --ask must succeed; stderr={stderr}");
     let open = env.read_open().expect("open file");
     assert_eq!(
         open.pointer("/7/ask").and_then(|v| v.as_str()),
@@ -389,9 +428,7 @@ fn feature_journal_append_rejects_empty_id() {
     let env = JournalEnv::new("append-empty-id");
     let before = env.open_bytes();
 
-    let (_stdout, _stderr, code) = env.run(
-        &["journal", "append", "", "50000", "claude-opus-4"],
-    );
+    let (_stdout, _stderr, code) = env.run(&["journal", "append", "", "50000", "claude-opus-4"]);
     assert_ne!(code, 0, "RED: empty id must cause non-zero exit");
 
     // journal-open.json must be unchanged (or still absent).
@@ -413,9 +450,7 @@ fn feature_journal_append_rejects_missing_model() {
     let before = env.open_bytes();
 
     // Only two positional args (id + tokens); model is missing.
-    let (_stdout, _stderr, code) = env.run(
-        &["journal", "append", "7", "50000"],
-    );
+    let (_stdout, _stderr, code) = env.run(&["journal", "append", "7", "50000"]);
     assert_ne!(code, 0, "RED: missing model must cause non-zero exit");
 
     let after = env.open_bytes();
@@ -435,10 +470,11 @@ fn feature_journal_append_rejects_non_numeric_tokens() {
     let env = JournalEnv::new("append-bad-tokens");
     let before = env.open_bytes();
 
-    let (_stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "abc", "claude-opus-4"],
+    let (_stdout, stderr, code) = env.run(&["journal", "append", "7", "abc", "claude-opus-4"]);
+    assert_ne!(
+        code, 0,
+        "RED: non-numeric tokens must cause non-zero exit; stderr={stderr}"
     );
-    assert_ne!(code, 0, "RED: non-numeric tokens must cause non-zero exit; stderr={stderr}");
 
     // The error must be a parse error, not a silent coercion to 0.
     // When GREEN, stderr must contain a parse-error message; we verify this when code != 0.
@@ -503,7 +539,10 @@ fn feature_journal_close_prices_and_appends_record() {
     );
     // Must contain required fields.
     assert!(rec.get("ts").is_some(), "record must have 'ts'");
-    assert!(rec.get("ask_summary").is_some(), "record must have 'ask_summary'");
+    assert!(
+        rec.get("ask_summary").is_some(),
+        "record must have 'ask_summary'"
+    );
     assert!(rec.get("by_model").is_some(), "record must have 'by_model'");
 
     // journal-open.json must no longer have entry keyed "7".
@@ -565,7 +604,10 @@ fn feature_journal_close_unknown_model_zero_cost_not_fail() {
     );
 
     let (_stdout, _stderr, code) = env.run(&["journal", "close", "7"]);
-    assert_eq!(code, 0, "closing with an unpriced model must succeed (fails-open)");
+    assert_eq!(
+        code, 0,
+        "closing with an unpriced model must succeed (fails-open)"
+    );
 
     let records = env.read_journal();
     assert_eq!(records.len(), 1, "one record");
@@ -579,16 +621,28 @@ fn feature_journal_close_unknown_model_zero_cost_not_fail() {
 
     // The unpriced model must appear in by_model with 10000 tokens and 0.0 cost.
     let by_model = rec.get("by_model").expect("by_model must exist");
-    let unknown = by_model.get("unknown-future-model").expect("unknown-future-model must appear");
-    let unknown_cost = unknown.get("cost_usd").and_then(|v| v.as_f64())
+    let unknown = by_model
+        .get("unknown-future-model")
+        .expect("unknown-future-model must appear");
+    let unknown_cost = unknown
+        .get("cost_usd")
+        .and_then(|v| v.as_f64())
         .or_else(|| {
             // May be a flat number or an object.
-            if unknown.is_number() { unknown.as_f64() } else { None }
+            if unknown.is_number() {
+                unknown.as_f64()
+            } else {
+                None
+            }
         });
     // At minimum: tokens present and accounted for.
-    let unknown_tokens = unknown.get("tokens")
-        .and_then(|v| v.as_i64())
-        .or_else(|| if unknown.is_number() { unknown.as_i64() } else { None });
+    let unknown_tokens = unknown.get("tokens").and_then(|v| v.as_i64()).or_else(|| {
+        if unknown.is_number() {
+            unknown.as_i64()
+        } else {
+            None
+        }
+    });
     assert_eq!(
         unknown_tokens,
         Some(10000),
@@ -613,7 +667,11 @@ fn feature_journal_close_no_matching_entry_errors() {
 
     // No record must be appended.
     let records = env.read_journal();
-    assert_eq!(records.len(), 0, "no record must be appended when the id is not found");
+    assert_eq!(
+        records.len(),
+        0,
+        "no record must be appended when the id is not found"
+    );
 }
 
 /// @EARS-TF-7-015 @unhappy
@@ -641,8 +699,7 @@ fn feature_journal_close_rejects_empty_id() {
 fn feature_journal_records_persist_across_session_reset() {
     let env = JournalEnv::new("persist-reset");
     // Seed a finalised record in cost-journal.jsonl.
-    let existing_record =
-        r#"{"roadmap_id":"7","ts":1700000000,"ask_summary":"draft the spec","total_tokens":80000,"total_cost_usd":0.5,"by_model":{"claude-haiku-4-5":{"tokens":80000,"cost_usd":0.5}}}"#;
+    let existing_record = r#"{"roadmap_id":"7","ts":1700000000,"ask_summary":"draft the spec","total_tokens":80000,"total_cost_usd":0.5,"by_model":{"claude-haiku-4-5":{"tokens":80000,"cost_usd":0.5}}}"#;
     env.seed_journal(&format!("{existing_record}\n"));
 
     // Run `tf budget set --reset` (session boundary) — this must NOT touch cost-journal.jsonl.
@@ -653,7 +710,11 @@ fn feature_journal_records_persist_across_session_reset() {
 
     // The record must still be present, byte-for-byte.
     let records = env.read_journal();
-    assert_eq!(records.len(), 1, "one record must still be in cost-journal.jsonl");
+    assert_eq!(
+        records.len(),
+        1,
+        "one record must still be in cost-journal.jsonl"
+    );
     assert_eq!(
         records[0].get("roadmap_id").and_then(|v| v.as_str()),
         Some("7"),
@@ -709,7 +770,10 @@ fn feature_journal_read_id_filter_returns_single_entry() {
     let before = std::fs::read(&env.journal_path).unwrap();
 
     let (stdout, stderr, code) = env.run(&["journal", "read", "--id", "6"]);
-    assert_eq!(code, 0, "RED: tf journal read --id must exit 0; stderr={stderr}");
+    assert_eq!(
+        code, 0,
+        "RED: tf journal read --id must exit 0; stderr={stderr}"
+    );
 
     let arr: Vec<Value> = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("must be valid JSON; err={e}; stdout={stdout}"));
@@ -722,7 +786,10 @@ fn feature_journal_read_id_filter_returns_single_entry() {
 
     // journal file must not be mutated by a read.
     let after = std::fs::read(&env.journal_path).unwrap();
-    assert_eq!(before, after, "cost-journal.jsonl must not be mutated by a read");
+    assert_eq!(
+        before, after,
+        "cost-journal.jsonl must not be mutated by a read"
+    );
 }
 
 /// @EARS-TF-7-019 @happy
@@ -742,7 +809,10 @@ fn feature_journal_read_last_n_returns_most_recent() {
     ));
 
     let (stdout, stderr, code) = env.run(&["journal", "read", "--last", "2"]);
-    assert_eq!(code, 0, "RED: tf journal read --last must exit 0; stderr={stderr}");
+    assert_eq!(
+        code, 0,
+        "RED: tf journal read --last must exit 0; stderr={stderr}"
+    );
 
     let arr: Vec<Value> = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("must be valid JSON; err={e}; stdout={stdout}"));
@@ -770,10 +840,16 @@ fn feature_journal_read_last_n_returns_most_recent() {
 fn feature_journal_read_absent_journal_returns_empty_array() {
     let env = JournalEnv::new("read-absent");
     // Do NOT seed cost-journal.jsonl — it must not exist.
-    assert!(!env.journal_path.exists(), "journal must not exist for this test");
+    assert!(
+        !env.journal_path.exists(),
+        "journal must not exist for this test"
+    );
 
     let (stdout, stderr, code) = env.run(&["journal", "read"]);
-    assert_eq!(code, 0, "RED: tf journal read on absent journal must exit 0; stderr={stderr}");
+    assert_eq!(
+        code, 0,
+        "RED: tf journal read on absent journal must exit 0; stderr={stderr}"
+    );
     assert_eq!(
         stdout.trim(),
         "[]",
@@ -805,13 +881,15 @@ fn feature_journal_close_truncates_ask_to_100_chars_by_default() {
 
     let records = env.read_journal();
     assert_eq!(records.len(), 1, "one record");
-    let summary = records[0].get("ask_summary")
+    let summary = records[0]
+        .get("ask_summary")
         .and_then(|v| v.as_str())
         .expect("ask_summary must be present");
     assert_eq!(
         summary.len(),
         100,
-        "ask_summary must be the first 100 chars of the stored ask; got len={}", summary.len()
+        "ask_summary must be the first 100 chars of the stored ask; got len={}",
+        summary.len()
     );
     assert_eq!(
         summary,
@@ -835,9 +913,7 @@ fn feature_journal_corrupt_open_file_no_panic() {
     // Write non-JSON bytes to journal-open.json.
     std::fs::write(&env.open_path, b"this is not json }{{{").unwrap();
 
-    let (_stdout, stderr, code) = env.run(
-        &["journal", "append", "7", "50000", "claude-opus-4"],
-    );
+    let (_stdout, stderr, code) = env.run(&["journal", "append", "7", "50000", "claude-opus-4"]);
 
     // Must exit non-zero with a typed error.
     assert_ne!(code, 0, "RED: corrupt open file must cause non-zero exit");
@@ -875,15 +951,22 @@ fn feature_mcp_journal_append_upserts_shared_open_entry() {
 
     // RED: method-not-found error expected until tf_journal_append is implemented.
     let is_error = result.get("code").is_some()
-        || result.as_str().map(|s| s.contains("not found") || s.contains("error")).unwrap_or(false);
+        || result
+            .as_str()
+            .map(|s| s.contains("not found") || s.contains("error"))
+            .unwrap_or(false);
     if is_error {
         eprintln!("RED: tf_journal_append not yet implemented; result={result}");
         return;
     }
 
     // When GREEN: open entry must exist with accumulated_tokens == 50000.
-    let open = env.read_open().expect("journal-open.json must exist after MCP append");
-    let entry = open.get("7").expect("entry '7' must exist after MCP append");
+    let open = env
+        .read_open()
+        .expect("journal-open.json must exist after MCP append");
+    let entry = open
+        .get("7")
+        .expect("entry '7' must exist after MCP append");
     assert_eq!(
         entry.get("accumulated_tokens").and_then(|v| v.as_i64()),
         Some(50000),
@@ -922,7 +1005,9 @@ fn feature_mcp_journal_read_matches_cli_read() {
     }
 
     // When GREEN: result must contain only the entry with roadmap_id "7".
-    let arr = result.as_array().expect("tf_journal_read must return an array");
+    let arr = result
+        .as_array()
+        .expect("tf_journal_read must return an array");
     assert_eq!(arr.len(), 1, "must return exactly 1 entry for roadmap_id 7");
     assert_eq!(
         arr[0].get("roadmap_id").and_then(|v| v.as_str()),
@@ -962,17 +1047,25 @@ fn feature_mcp_cost_journal_resource_returns_last_100() {
 
     // Check for not-found (RED state).
     let is_error = result.get("code").is_some()
-        || result.as_str().map(|s| s.contains("not found") || s.contains("error")).unwrap_or(false);
+        || result
+            .as_str()
+            .map(|s| s.contains("not found") || s.contains("error"))
+            .unwrap_or(false);
     if is_error {
         eprintln!("RED: tf://cost-journal resource not yet implemented; result={result}");
         return;
     }
 
     // When GREEN: must be a JSON array of length 100.
-    let arr = result.as_array()
+    let arr = result
+        .as_array()
         .or_else(|| result.get("contents").and_then(|c| c.as_array()))
         .expect("tf://cost-journal must return an array");
-    assert_eq!(arr.len(), 100, "must return exactly 100 entries (the last 100)");
+    assert_eq!(
+        arr.len(),
+        100,
+        "must return exactly 100 entries (the last 100)"
+    );
 
     // Oldest in array must be id "51"; newest must be id "150".
     assert_eq!(
@@ -1016,7 +1109,10 @@ fn feature_mcp_resources_list_has_four_resources_with_journal() {
         .filter_map(|r| r.get("uri").and_then(|v| v.as_str()))
         .collect();
     assert!(uris.contains(&"tf://status"), "tf://status must be listed");
-    assert!(uris.contains(&"tf://calibration"), "tf://calibration must be listed");
+    assert!(
+        uris.contains(&"tf://calibration"),
+        "tf://calibration must be listed"
+    );
     assert!(uris.contains(&"tf://events"), "tf://events must be listed");
     assert!(
         uris.contains(&"tf://cost-journal"),
@@ -1054,7 +1150,10 @@ fn feature_no_features_binary_hides_journal_subcommand() {
 #[test]
 fn feature_no_features_binary_journal_subcommand_is_unrecognised() {
     let (_stdout, stderr, code) = run_tf(&["journal", "read"], &[]);
-    assert_ne!(code, 0, "tf journal on a no-features binary must exit non-zero");
+    assert_ne!(
+        code, 0,
+        "tf journal on a no-features binary must exit non-zero"
+    );
     let err_lower = stderr.to_lowercase() + &_stdout.to_lowercase();
     assert!(
         err_lower.contains("unrecognised")
@@ -1098,11 +1197,13 @@ fn feature_mcp_only_journal_handlers_absent() {
         Some(json!({"roadmap_id": "7", "tokens": 1, "model": "x"})),
     );
     // A method-not-found error must be returned (JSON-RPC error code -32601 or similar).
-    let is_method_not_found = result.get("code")
+    let is_method_not_found = result
+        .get("code")
         .and_then(|v| v.as_i64())
         .map(|c| c == -32601)
         .unwrap_or(false)
-        || result.get("message")
+        || result
+            .get("message")
             .and_then(|v| v.as_str())
             .map(|s| s.to_lowercase().contains("not found") || s.to_lowercase().contains("unknown"))
             .unwrap_or(false);
@@ -1118,7 +1219,8 @@ fn feature_mcp_only_journal_handlers_absent() {
         Some(json!({"uri": "tf://cost-journal"})),
     );
     let resource_not_found = res_result.get("code").is_some()
-        || res_result.get("message")
+        || res_result
+            .get("message")
             .and_then(|v| v.as_str())
             .map(|s| s.to_lowercase().contains("not found"))
             .unwrap_or(false);
@@ -1208,12 +1310,15 @@ fn feature_journal_close_summarize_fails_open_no_api_key() {
 
     let records = env.read_journal();
     assert_eq!(records.len(), 1, "record must still be appended");
-    let summary = records[0].get("ask_summary").and_then(|v| v.as_str())
+    let summary = records[0]
+        .get("ask_summary")
+        .and_then(|v| v.as_str())
         .expect("ask_summary must be present");
     assert_eq!(
         summary.len(),
         100,
-        "fails-open: ask_summary must be the first 100 chars; got len={}", summary.len()
+        "fails-open: ask_summary must be the first 100 chars; got len={}",
+        summary.len()
     );
     assert_eq!(
         summary,
@@ -1248,7 +1353,9 @@ fn feature_journal_close_summarize_fails_open_no_curl() {
 
     let records = env.read_journal();
     assert_eq!(records.len(), 1, "record must be appended");
-    let summary = records[0].get("ask_summary").and_then(|v| v.as_str())
+    let summary = records[0]
+        .get("ask_summary")
+        .and_then(|v| v.as_str())
         .expect("ask_summary must be present");
     assert_eq!(summary.len(), 100, "falls back to 100-char truncation");
     assert_eq!(summary, &long_ask[..100]);
@@ -1289,13 +1396,22 @@ fn feature_journal_close_summarize_fails_open_curl_error() {
     let envs_str: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
     let (_stdout, _stderr, code) = run_tf(&["journal", "close", "7", "--summarize"], &envs_str);
-    assert_eq!(code, 0, "RED: fails-open — exit 0 even when curl returns error");
+    assert_eq!(
+        code, 0,
+        "RED: fails-open — exit 0 even when curl returns error"
+    );
 
     let records = env.read_journal();
     assert_eq!(records.len(), 1, "record must be appended");
-    let summary = records[0].get("ask_summary").and_then(|v| v.as_str())
+    let summary = records[0]
+        .get("ask_summary")
+        .and_then(|v| v.as_str())
         .expect("ask_summary must be present");
-    assert_eq!(summary.len(), 100, "falls back to 100-char truncation on curl error");
+    assert_eq!(
+        summary.len(),
+        100,
+        "falls back to 100-char truncation on curl error"
+    );
     assert_eq!(summary, &long_ask[..100]);
 }
 

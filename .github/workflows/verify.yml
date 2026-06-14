@@ -29,6 +29,9 @@ jobs:
       # the MCP handlers) unexercised, which is how a stub facade once slipped through.
       - run: cargo clippy --all-targets -p tf-cli --features mcp,dashboard -- -D warnings
       - run: cargo test -p tf-cli --features mcp,dashboard
+      # Journal feature: gated tests (commands_journal_6/7) only run when journal is compiled in.
+      - run: cargo clippy --all-targets -p tf-cli --features mcp,dashboard,journal -- -D warnings
+      - run: cargo test -p tf-cli --features mcp,dashboard,journal
 
   coverage:
     name: llvm-cov (ratcheting toward 100%)
